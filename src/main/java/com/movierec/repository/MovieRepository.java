@@ -15,4 +15,11 @@ public interface MovieRepository extends R2dbcRepository<Movie, Long> {
      */
     @Query("SELECT * FROM movies ORDER BY id ASC LIMIT :limit")
     Flux<Movie> findTopMovies(int limit);
+
+    /**
+     * 获取所有电影的 genres 字段（用于前端类型筛选）
+     */
+    @Query("SELECT DISTINCT genres FROM movies WHERE genres IS NOT NULL AND genres != ''")
+    Flux<String> findAllDistinctGenres();
 }
+
