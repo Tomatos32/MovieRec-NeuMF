@@ -19,35 +19,8 @@
         </div>
 
         <div class="header-controls">
-          <!-- 冷启动状态提示 -->
-          <transition name="fade">
-            <span v-if="isColdStart" class="cold-start-badge">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                <line x1="12" y1="9" x2="12" y2="13" />
-                <line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-              冷启动模式
-            </span>
-          </transition>
-
-          <!-- 用户 ID 输入 -->
-          <div class="user-input-group">
-            <label for="userId">User ID</label>
-            <input
-              id="userId"
-              v-model.number="userId"
-              type="number"
-              min="0"
-              placeholder="输入用户 ID"
-              @keydown.enter="loadRecommendations"
-            />
-            <button class="btn-load" @click="loadRecommendations" :disabled="isLoading">
-              <svg v-if="isLoading" class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-linecap="round" />
-              </svg>
-              {{ isLoading ? '加载中…' : '获取推荐' }}
-            </button>
+          <div class="user-info">
+            <span class="username">{{ userStore.user?.username }} (ID: {{ userId }})</span>
             <button @click="handleLogout" class="ml-4 text-sm text-[#9a9ab0] hover:text-white transition-colors underline">登出</button>
           </div>
         </div>
@@ -67,13 +40,19 @@
         <button @click="loadRecommendations">重试</button>
       </div>
 
+      <!-- 当前选择的类型 -->
+      <div v-if="selectedGenre" class="filter-status">
+        <span>正在查看: <strong>{{ selectedGenre }}</strong> 推荐</span>
+        <button @click="handleGenreSelect('')" class="clear-filter">清除筛选</button>
+      </div>
+
       <!-- 骨架屏加载态 -->
       <div v-if="isLoading" class="movie-grid">
         <SkeletonCard v-for="i in 12" :key="'sk-' + i" />
       </div>
 
       <!-- 空状态 -->
-      <div v-else-if="movies.length === 0 && !hasError" class="empty-state">
+      <div v-else-if="displayMovies.length === 0 && !hasError" class="empty-state">
         <div class="empty-state-icon">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
             <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
@@ -82,15 +61,15 @@
             <line x1="2" y1="12" x2="22" y2="12" />
           </svg>
         </div>
-        <h2>发现你的下一部好电影</h2>
-        <p>输入你的用户 ID，AI 将为你生成个性化推荐</p>
+        <h2>暂无相关电影</h2>
+        <p>尝试选择其他类型或刷新页面</p>
       </div>
 
       <!-- 电影卡片网格 -->
       <div v-else class="movie-grid">
         <transition-group name="card-enter">
           <MovieCard
-            v-for="(movie, index) in movies"
+            v-for="(movie, index) in displayMovies"
             :key="movie.movieId"
             :movie="movie"
             :style="{ animationDelay: `${index * 50}ms` }"
@@ -105,50 +84,101 @@
     <footer class="app-footer">
       <p>MovieRec-NNCF &middot; 基于 NeuMF 神经矩阵分解的工业级推荐引擎</p>
     </footer>
+
+    <!-- ========== 底部类型挑选 Dock 栏 ========== -->
+    <section class="dock-section" v-if="genreItems.length > 0">
+      <div class="gallery-container">
+        <CircularGallery
+          :items="genreItems"
+          :bend="3"
+          text-color="#ffffff"
+          :border-radius="0.05"
+          font="bold 20px Figtree"
+          :scroll-speed="2"
+          :scroll-ease="0.05"
+          @select="handleGenreSelect"
+        />
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watchEffect } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import MovieCard from '../components/MovieCard.vue'
 import SkeletonCard from '../components/SkeletonCard.vue'
+import CircularGallery from '../components/CircularGallery.vue'
 import { useRecommendations } from '../composables/useRecommendations'
 import { useDebounce } from '../composables/useDebounce'
 import { useUserStore } from '../stores/user'
+import { fetchWithAuth } from '../api/fetch'
 import type { FeedbackPayload } from '../types'
 
 const router = useRouter()
 const userStore = useUserStore()
-const userId = ref<number>(1)
+const userId = computed(() => userStore.userId)
 
-// Initialize userId from userStore if available
-watchEffect(() => {
-  if (userStore.user?.id) {
-    userId.value = userStore.user.id
-  }
-})
+const genres = ref<string[]>([])
+const selectedGenre = ref('')
 
 const {
   movies,
   isLoading,
   hasError,
   errorMessage,
-  isColdStart,
   fetchRecommendations,
   sendFeedback,
 } = useRecommendations()
 
 const { debounce } = useDebounce()
 
+const displayMovies = computed(() => {
+  if (!selectedGenre.value) return movies.value
+  return movies.value.filter(m => m.genres.includes(selectedGenre.value))
+})
+
+const genreItems = computed(() => {
+  return genres.value.map((genre) => ({
+    text: genre,
+    image: `https://picsum.photos/seed/${genre}/800/600`
+  }))
+})
+
+onMounted(async () => {
+  // 获取所有类别
+  try {
+    const res = await fetchWithAuth('/api/movies/genres')
+    if (res.code === 200) {
+      genres.value = res.genres
+    }
+  } catch (err) {
+    console.error('Failed to fetch genres:', err)
+  }
+
+  // 自动获取推荐
+  loadRecommendations()
+})
+
 const loadRecommendations = () => {
-  if (userId.value >= 0) {
+  if (userId.value !== null) {
     fetchRecommendations(userId.value)
   }
 }
 
+// 监听用户变动自动刷新
+watch(() => userId.value, (newId) => {
+  if (newId !== null) {
+    loadRecommendations()
+  }
+})
+
+const handleGenreSelect = (genre: string) => {
+  selectedGenre.value = genre
+}
+
 const buildPayload = (movieId: number, actionType: FeedbackPayload['actionType']): FeedbackPayload => ({
-  userId: userId.value,
+  userId: userId.value || 0,
   movieId,
   actionType,
   timestamp: Date.now(),
@@ -178,6 +208,8 @@ const handleLogout = () => {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  background: var(--color-bg-primary);
+  padding-bottom: 320px; /* 为增高的底部的 Dock 栏留出完美空间 */
 }
 
 /* ========== 顶部导航栏 ========== */
@@ -248,84 +280,57 @@ const handleLogout = () => {
   display: flex;
   align-items: center;
   gap: 16px;
-  flex-wrap: wrap;
 }
 
-/* 冷启动角标 */
-.cold-start-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-warning);
-  background: rgba(251, 191, 36, 0.1);
-  padding: 4px 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(251, 191, 36, 0.25);
+.username {
+  font-size: 14px;
+  color: var(--color-text-secondary);
 }
 
-/* 用户输入组 */
-.user-input-group {
+/* ========== 底部类型挑选 Dock 栏 ========== */
+.dock-section {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100; /* 高于主体内容，创造抽屉感 */
+  display: flex;
+  justify-content: center;
+  pointer-events: none; /* 让空白处可以点击到底部内容 */
+  background: linear-gradient(to top, rgba(10, 10, 15, 0.95) 0%, rgba(10, 10, 15, 0) 100%);
+  padding-bottom: 20px;
+}
+
+.dock-section .gallery-container {
+  height: 280px; /* 显著提升容器高度以容纳文字和 3 弯曲度的布局 */
+  width: 100%;
+  max-width: 1440px;
+  pointer-events: auto; /* 重新启用画廊的交互 */
+  background: transparent;
+  border: none;
+  overflow: hidden;
+}
+
+/* ========== 筛选状态 ========== */
+.filter-status {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.user-input-group label {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  font-weight: 500;
-}
-
-.user-input-group input {
-  width: 120px;
-  padding: 7px 12px;
-  font-size: 13px;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 8px 16px;
+  background: rgba(124, 92, 252, 0.1);
+  border: 1px solid rgba(124, 92, 252, 0.2);
+  border-radius: 20px;
+  width: fit-content;
+  font-size: 14px;
   color: var(--color-text-primary);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  outline: 2px solid transparent;
-  outline-offset: -1px;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.user-input-group input:focus-visible {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-glow);
-}
-
-.btn-load {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 18px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--color-accent);
-  border-radius: var(--radius-sm);
-  transition: background-color var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast);
-  white-space: nowrap;
-}
-
-.btn-load:hover:not(:disabled) {
-  background: var(--color-accent-light);
-  box-shadow: 0 0 16px var(--color-accent-glow);
-}
-
-.btn-load:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.spinner {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.clear-filter {
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 500;
 }
 
 /* ========== 主内容 ========== */
@@ -356,29 +361,10 @@ const handleLogout = () => {
   position: relative;
 }
 
-.empty-state::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 300px;
-  height: 300px;
-  background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 60%);
-  opacity: 0.5;
-  pointer-events: none;
-}
-
 .empty-state-icon {
   margin-bottom: 24px;
   color: var(--color-accent);
   opacity: 0.8;
-  animation: float 6s ease-in-out infinite;
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
 }
 
 .empty-state h2 {
@@ -386,12 +372,6 @@ const handleLogout = () => {
   font-weight: 600;
   color: var(--color-text-primary);
   margin-bottom: 12px;
-  text-wrap: balance;
-  letter-spacing: -0.01em;
-}
-
-.empty-state p {
-  font-size: 14px;
 }
 
 /* 错误横幅 */
@@ -406,27 +386,6 @@ const handleLogout = () => {
   border-radius: var(--radius-md);
   color: var(--color-danger);
   font-size: 14px;
-  animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.error-banner button {
-  margin-left: auto;
-  padding: 6px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-danger);
-  background: rgba(248, 113, 113, 0.1);
-  border-radius: var(--radius-sm);
-  transition: background-color var(--transition-fast);
-}
-
-.error-banner button:hover {
-  background: rgba(248, 113, 113, 0.2);
 }
 
 /* ========== 底部 ========== */
@@ -436,29 +395,9 @@ const handleLogout = () => {
   font-size: 13px;
   color: var(--color-text-muted);
   position: relative;
-  margin-top: auto;
-}
-
-.app-footer::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
 }
 
 /* ========== 动画 ========== */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity var(--transition-normal);
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
 .card-enter-enter-active {
   animation: cardIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -487,21 +426,6 @@ const handleLogout = () => {
   .movie-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 16px;
-  }
-
-  .user-input-group input {
-    width: 90px;
-  }
-}
-
-@media (max-width: 480px) {
-  .movie-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-  }
-
-  .brand-tag {
-    display: none;
   }
 }
 </style>

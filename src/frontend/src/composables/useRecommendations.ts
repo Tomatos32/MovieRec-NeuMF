@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { Movie, RecommendationResponse, FeedbackPayload } from '../types'
+import { fetchWithAuth } from '../api/fetch'
 
 /**
  * 推荐数据获取与反馈上报 composable
@@ -25,12 +26,7 @@ export const useRecommendations = () => {
         console.log('[Recommendations] 请求:', url)
 
         try {
-            const response = await fetch(url)
-            console.log('[Recommendations] 响应状态:', response.status)
-
-            if (!response.ok) throw new Error(`HTTP ${response.status}`)
-
-            const result: RecommendationResponse = await response.json()
+            const result: RecommendationResponse = await fetchWithAuth(url)
             console.log('[Recommendations] 响应数据:', result)
 
             movies.value = result.data ?? []
@@ -52,9 +48,9 @@ export const useRecommendations = () => {
      */
     const sendFeedback = async (payload: FeedbackPayload) => {
         try {
-            await fetch('/api/feedback', {
+            await fetchWithAuth('/api/feedback', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // fetchWithAuth already adds Content-Type
                 body: JSON.stringify(payload),
             })
         } catch {
