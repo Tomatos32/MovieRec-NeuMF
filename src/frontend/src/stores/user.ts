@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { loginApi, registerApi } from '@/api/auth'
+import router from '@/router'
 
 export const useUserStore = defineStore('user', () => {
     const token = ref(localStorage.getItem('token') || '')
@@ -7,40 +9,43 @@ export const useUserStore = defineStore('user', () => {
 
     const isAuthenticated = computed(() => !!token.value)
 
-    // Mock Login API
+    /** 当前登录用户的数字 ID（来自后端 AuthResponse.userId） */
+    const userId = computed<number | null>(() => user.value?.id ?? null)
+
     const login = async (credentials: any) => {
-        return new Promise((resolve, reject) => {
-            setTimeout(() => {
-                if (credentials.username === 'admin' && credentials.password !== '123456') {
-                    reject(new Error('密码错误'))
-                    return
-                }
+        try {
+            const data = await loginApi(credentials)
+            const { token: newToken, username, userId: uid } = data
+            const savedUser = { username, id: uid }
 
-                const mockToken = 'mock-jwt-token-12345'
-                const mockUser = { id: 1, username: credentials.username }
+            token.value = newToken
+            user.value = savedUser
 
-                token.value = mockToken
-                user.value = mockUser
+            localStorage.setItem('token', newToken)
+            localStorage.setItem('user', JSON.stringify(savedUser))
 
-                localStorage.setItem('token', mockToken)
-                localStorage.setItem('user', JSON.stringify(mockUser))
-
-                resolve({ token: mockToken, user: mockUser })
-            }, 1000)
-        })
+            return { token: newToken, user: savedUser }
+        } catch (error) {
+            throw error
+        }
     }
 
-    // Mock Register API
     const register = async (userData: any) => {
-        return new Promise((resolve, reject) => {
-            setTimeout(() => {
-                if (userData.username === 'admin') {
-                    reject(new Error('用户名已存在'))
-                    return
-                }
-                resolve({ message: 'Success' })
-            }, 1000)
-        })
+        try {
+            const data = await registerApi(userData)
+            // 注册成功后也可直接登录
+            if (data?.token) {
+                const { token: newToken, username, userId: uid } = data
+                const savedUser = { username, id: uid }
+                token.value = newToken
+                user.value = savedUser
+                localStorage.setItem('token', newToken)
+                localStorage.setItem('user', JSON.stringify(savedUser))
+            }
+            return data
+        } catch (error) {
+            throw error
+        }
     }
 
     const logout = () => {
@@ -48,11 +53,15 @@ export const useUserStore = defineStore('user', () => {
         user.value = null
         localStorage.removeItem('token')
         localStorage.removeItem('user')
+        if (router.currentRoute.value.path !== '/login') {
+            router.push('/login')
+        }
     }
 
     return {
         token,
         user,
+        userId,
         isAuthenticated,
         login,
         register,
