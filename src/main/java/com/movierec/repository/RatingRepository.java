@@ -1,9 +1,10 @@
 package com.movierec.repository;
 
-import com.movierec.model.Rating;
-import org.springframework.data.r2dbc.repository.R2dbcRepository;
+import com.movierec.entity.Rating;
+import org.springframework.data.repository.reactive.ReactiveCrudRepository;
+
 import reactor.core.publisher.Mono;
 
-public interface RatingRepository extends R2dbcRepository<Rating, Long> {
+public interface RatingRepository extends ReactiveCrudRepository<Rating, Long> {
     Mono<Long> countByUserId(Long userId);
 }

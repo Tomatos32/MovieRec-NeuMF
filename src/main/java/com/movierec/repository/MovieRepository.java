@@ -21,5 +21,11 @@ public interface MovieRepository extends R2dbcRepository<Movie, Long> {
      */
     @Query("SELECT DISTINCT genres FROM movies WHERE genres IS NOT NULL AND genres != ''")
     Flux<String> findAllDistinctGenres();
+
+    /**
+     * 全量电影接口分页获取
+     */
+    @Query("SELECT * FROM movies ORDER BY id ASC LIMIT :limit OFFSET :offset")
+    Flux<Movie> findAllMovies(int limit, int offset);
 }
 
