@@ -32,9 +32,12 @@ public class FeedbackController {
             Long timestamp = payload.get("timestamp") != null 
                     ? Long.valueOf(payload.get("timestamp").toString()) 
                     : System.currentTimeMillis();
+            Double rating = payload.get("rating") != null 
+                    ? Double.valueOf(payload.get("rating").toString()) 
+                    : null;
 
             // 发送消息到 Kafka 不落盘，直接异步推队列
-            feedbackPipeline.sendFeedbackEvent(userId, movieId, actionType, timestamp);
+            feedbackPipeline.sendFeedbackEvent(userId, movieId, actionType, timestamp, rating);
 
             return Mono.just(ResponseEntity.ok(Map.of(
                     "code", 200,

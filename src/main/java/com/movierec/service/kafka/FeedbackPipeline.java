@@ -10,6 +10,15 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
+import com.movierec.entity.Interaction;
+import com.movierec.entity.Rating;
+import com.movierec.repository.InteractionRepository;
+import com.movierec.repository.MovieRepository;
+import com.movierec.repository.RatingRepository;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -22,25 +31,37 @@ public class FeedbackPipeline {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ReactiveStringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final InteractionRepository interactionRepository;
+    private final RatingRepository ratingRepository;
+    private final MovieRepository movieRepository;
 
     @Autowired
     public FeedbackPipeline(KafkaTemplate<String, String> kafkaTemplate, 
                             ReactiveStringRedisTemplate redisTemplate,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            InteractionRepository interactionRepository,
+                            RatingRepository ratingRepository,
+                            MovieRepository movieRepository) {
         this.kafkaTemplate = kafkaTemplate;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.interactionRepository = interactionRepository;
+        this.ratingRepository = ratingRepository;
+        this.movieRepository = movieRepository;
     }
 
     /**
      * 1. Kafka 生产者: 将接收到的事件序列化为 JSON 异步发送
      */
-    public void sendFeedbackEvent(Long userId, Long movieId, String actionType, Long timestamp) {
+    public void sendFeedbackEvent(Long userId, Long movieId, String actionType, Long timestamp, Double rating) {
         Map<String, Object> event = new HashMap<>();
         event.put("user_id", userId);
         event.put("movie_id", movieId);
         event.put("action_type", actionType);
         event.put("timestamp", timestamp);
+        if (rating != null) {
+            event.put("rating", rating);
+        }
 
         try {
             String payload = objectMapper.writeValueAsString(event);
@@ -65,18 +86,29 @@ public class FeedbackPipeline {
         try {
             Map<String, Object> event = objectMapper.readValue(message, Map.class);
             String action = (String) event.get("action_type");
+            Long userId = ((Number) event.get("user_id")).longValue();
+            Long movieId = ((Number) event.get("movie_id")).longValue();
             
-            // 简单演示: 如果是正面极强的交互或直接打分，记录特征轨迹
+            // 1. 维护用户最近点击/分发的滑动窗口 (List)
+            if ("click".equals(action) || "rate".equals(action)) {
+                String recentKey = "user_recent:" + userId;
+                // 将当前 movieId 插入列表头部
+                redisTemplate.opsForList().leftPush(recentKey, String.valueOf(movieId))
+                    .flatMap(len -> redisTemplate.opsForList().trim(recentKey, 0, 4)) // 只保留最近 5 个
+                    .subscribe();
+            }
+
+            // 2. 根据 movieId 反查流派并更新偏好画像 (Hash)
             if ("click".equals(action) || "rate".equals(action) || "wishlist".equals(action)) {
-                Long userId = ((Number) event.get("user_id")).longValue();
-                Long movieId = ((Number) event.get("movie_id")).longValue();
-                
-                // TODO: 根据 movieId 反查出相应的 Genres 标签，增加权重
-                String demoGenre = "Action"; 
-                
-                String redisKey = "user:session:" + userId + ":genres";
-                // 增加该流派的偏好权重分 1.0，并续期
-                redisTemplate.opsForHash().increment(redisKey, demoGenre, 1.0).subscribe();
+                movieRepository.findById(movieId).subscribe(movie -> {
+                    if (movie != null && movie.getGenres() != null) {
+                        String redisKey = "user:session:" + userId + ":genres";
+                        String[] genres = movie.getGenres().split("\\|");
+                        for (String genre : genres) {
+                            redisTemplate.opsForHash().increment(redisKey, genre, 1.0).subscribe();
+                        }
+                    }
+                });
             }
         } catch (Exception e) {
             log.error("Realtime Consumer Error", e);
@@ -90,10 +122,30 @@ public class FeedbackPipeline {
     @KafkaListener(topics = TOPIC_NAME, groupId = "datalake-archiver")
     public void consumeForDataLake(String message) {
         try {
-            // 解析并准备入库语句，或在此处累积 Batch 然后执行 MySQL 批量插入
-            // 模拟落盘
-            log.info("[DataLake Archiver] Persisting to Storage: {}", message);
-            // -> insert into interactions (user_id, movie_id, action_type, timestamp) values (...)
+            Map<String, Object> event = objectMapper.readValue(message, Map.class);
+            String action = (String) event.get("action_type");
+            Long userId = ((Number) event.get("user_id")).longValue();
+            Long movieId = ((Number) event.get("movie_id")).longValue();
+            Long timestamp = ((Number) event.get("timestamp")).longValue();
+
+            if ("rate".equals(action) && event.get("rating") != null) {
+                Double ratingVal = ((Number) event.get("rating")).doubleValue();
+                Rating ratingRecord = new Rating();
+                ratingRecord.setUserId(userId);
+                ratingRecord.setMovieId(movieId);
+                ratingRecord.setRating(ratingVal);
+                ratingRecord.setTimestamp(timestamp);
+                ratingRepository.save(ratingRecord).subscribe();
+                log.info("[DataLake Archiver] Saved Rating - User: {}, Movie: {}, Score: {}", userId, movieId, ratingVal);
+            } else {
+                Interaction interaction = new Interaction();
+                interaction.setUserId(userId);
+                interaction.setMovieId(movieId);
+                interaction.setActionType(action);
+                interaction.setTimestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.systemDefault()));
+                interactionRepository.save(interaction).subscribe();
+                log.info("[DataLake Archiver] Saved Interaction - User: {}, Movie: {}, Action: {}", userId, movieId, action);
+            }
         } catch (Exception e) {
             log.error("DataLake Consumer Error", e);
         }

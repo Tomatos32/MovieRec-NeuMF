@@ -51,4 +51,34 @@ public class MovieController {
                 .onErrorResume(ex -> Mono.just(ResponseEntity.internalServerError()
                         .body(Map.of("code", 500, "message", "获取类型失败: " + ex.getMessage()))));
     }
+
+    /**
+     * 分页获取全量电影
+     */
+    @GetMapping("/all")
+    public Mono<ResponseEntity<Map<String, Object>>> getAllMovies(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+        int offset = page * size;
+        return movieRepository.findAllMovies(size, offset)
+                .collectList()
+                .map(movies -> {
+                    List<Map<String, Object>> data = movies.stream()
+                        .map(movie -> Map.<String, Object>of(
+                                "movieId", movie.getId(),
+                                "title", movie.getTitle() != null ? movie.getTitle() : "未知电影",
+                                "genres", movie.getGenres() != null ? movie.getGenres() : "未分类",
+                                "score", 0.0,
+                                "posterUrl", ""
+                        )).collect(Collectors.toList());
+                    
+                    Map<String, Object> body = new LinkedHashMap<>();
+                    body.put("code", 200);
+                    body.put("message", "Success");
+                    body.put("data", data);
+                    return ResponseEntity.ok(body);
+                })
+                .onErrorResume(ex -> Mono.just(ResponseEntity.internalServerError()
+                        .body(Map.of("code", 500, "message", "获取全量电影失败: " + ex.getMessage(), "data", Collections.emptyList()))));
+    }
 }

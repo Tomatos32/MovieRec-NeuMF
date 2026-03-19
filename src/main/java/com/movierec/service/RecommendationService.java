@@ -57,15 +57,30 @@ public class RecommendationService {
         return getUserInteractionCount(userId)
                 .flatMap(interactionCount -> {
                     if (interactionCount < COLD_START_THRESHOLD) {
-                        // 模式 A: 冷启动降级，直接返回热门推荐
-                        return getPopularFallback(topK)
-                                .flatMap(movieIds -> enrichMovieIds(movieIds, "cold-start", topK));
+                        // 尝试从实时 Fast-Track 路径获取 (即使用户是冷启动，只要刚点过电影就有实时反馈)
+                        return getFastTrackRecommendations(userId, topK)
+                                .flatMap(fastIds -> {
+                                    if (!fastIds.isEmpty()) {
+                                        return enrichMovieIds(fastIds, "fast-track-i2i", topK);
+                                    }
+                                    // 彻底没数据，回退至热门模式 A
+                                    return getPopularFallback(topK)
+                                            .flatMap(movieIds -> enrichMovieIds(movieIds, "cold-start", topK));
+                                });
                     } else {
-                        // 模式 B: 深度个性化推荐
+                        // 模式 B: 深度个性化推荐 (融合了离线 NeuMF 和 在线 I2I 候选)
                         return getPersonalizedRecommendation(userId, topK)
                                 .flatMap(movieIds -> enrichMovieIds(movieIds, "personalized", topK));
                     }
                 });
+    }
+
+    /**
+     * 强行获取热门推荐
+     */
+    public Mono<RecommendationResult> getPopularRecommendations(int topK) {
+        return getPopularFallback(topK)
+                .flatMap(movieIds -> enrichMovieIds(movieIds, "popular", topK));
     }
 
     /**
@@ -125,8 +140,19 @@ public class RecommendationService {
     @CircuitBreaker(name = "fastApiInference", fallbackMethod = "sidecarFallback")
     @TimeLimiter(name = "fastApiInference")
     private Mono<List<Long>> invokeSidecarInference(Long userId, int topK) {
-        // 构建请求报文，由推荐引擎先召回一批 candidate_movie_ids 供给模型推断 (这里用 Dummy Data 代替)
-        List<Long> candidateIds = List.of(101L, 105L, 203L, 999L, 404L, 502L, 888L);
+        // 核心优化：不再使用 Dummy Data，而是将实时 I2I 召回的候选集送入 NCF 模型进行精准排序
+        return getFastTrackRecommendations(userId, 50) // 获取 50 个高相关候选
+                .flatMap(candidates -> {
+                    List<Long> finalCandidates = candidates;
+                    if (finalCandidates.isEmpty()) {
+                        // 如果没有实时行为，回退到热门电影作为候选池
+                        return getPopularFallback(50).flatMap(popular -> doInference(userId, popular, topK));
+                    }
+                    return doInference(userId, finalCandidates, topK);
+                });
+    }
+
+    private Mono<List<Long>> doInference(Long userId, List<Long> candidateIds, int topK) {
         Map<String, Object> requestBody = Map.of(
                 "user_id", userId,
                 "candidate_movie_ids", candidateIds,
@@ -144,6 +170,22 @@ public class RecommendationService {
                             .map(item -> Long.valueOf(item.get("movie_id").toString()))
                             .collect(Collectors.toList());
                 });
+    }
+
+    /**
+     * 实时 I2I "Fast-Track" 逻辑：
+     * 读取 Redis 中用户最近的行为，并根据 I2I 相似度矩阵召回关联电影
+     */
+    private Mono<List<Long>> getFastTrackRecommendations(Long userId, int topK) {
+        String recentKey = "user_recent:" + userId;
+        return redisTemplate.opsForList().range(recentKey, 0, 2) // 取最近 3 个动作
+                .flatMap(movieId -> {
+                    String simKey = "movie_sim:" + movieId;
+                    return redisTemplate.opsForList().range(simKey, 0, 9); // 每个动作召回 10 个相似电影
+                })
+                .map(Long::valueOf)
+                .distinct()
+                .collectList();
     }
 
     /**

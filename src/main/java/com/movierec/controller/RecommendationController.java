@@ -45,4 +45,28 @@ public class RecommendationController {
                         "userId", userId
                 ))));
     }
+
+    /**
+     * 获取热门推荐接口
+     * GET /api/recommendations/popular
+     * 返回格式: { code: 200, data: Movie[], mode: "popular" }
+     */
+    @GetMapping("/popular")
+    public Mono<ResponseEntity<Map<String, Object>>> getPopularRecommendations(
+            @RequestParam(value = "topK", defaultValue = "10") int topK) {
+
+        return recommendationService.getPopularRecommendations(topK)
+                .map(result -> ResponseEntity.ok(Map.of(
+                        "code", 200,
+                        "message", "Success",
+                        "data", result.data(),
+                        "mode", result.mode()
+                )))
+                .onErrorResume(ex -> Mono.just(ResponseEntity.internalServerError().body(Map.of(
+                        "code", 500,
+                        "message", "推荐服务异常: " + ex.getMessage(),
+                        "data", java.util.Collections.emptyList(),
+                        "mode", "popular"
+                ))));
+    }
 }
