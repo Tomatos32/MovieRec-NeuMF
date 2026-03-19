@@ -17,6 +17,7 @@ export type RecommendationResponse = {
 export type FeedbackPayload = {
     userId: number
     movieId: number
-    actionType: 'click' | 'dislike' | 'wishlist'
+    actionType: 'click' | 'dislike' | 'wishlist' | 'rate'
+    rating?: number
     timestamp: number
 }

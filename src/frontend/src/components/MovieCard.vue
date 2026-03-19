@@ -3,7 +3,7 @@
     <!-- 海报区域 -->
     <div class="card-poster">
       <img
-        :src="movie.posterUrl || fallbackPoster"
+        :src="`/posters/${movie.movieId}.jpg`"
         :alt="movie.title"
         width="300"
         height="450"
@@ -24,6 +24,24 @@
     <div class="card-body">
       <h3 class="card-title">{{ movie.title }}</h3>
       <p class="card-genres">{{ formattedGenres }}</p>
+
+      <!-- 评分组件 -->
+      <div class="card-rating" @click.stop>
+        <span 
+          v-for="star in 5" 
+          :key="star"
+          class="star-icon"
+          :class="{ 'active': star <= (hoverRating || currentRating) }"
+          @mouseenter="hoverRating = star"
+          @mouseleave="hoverRating = 0"
+          @click="handleRate(star)"
+          :title="`${star} 星`"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{'filled': star <= (hoverRating || currentRating)}">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        </span>
+      </div>
 
       <!-- 操作按钮区 -->
       <div class="card-actions">
@@ -58,9 +76,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'click', movieId: number): void
   (e: 'dislike', movieId: number): void
+  (e: 'rate', movieId: number, rating: number): void
 }>()
 
 const isDislikeDisabled = ref(false)
+const currentRating = ref(0)
+const hoverRating = ref(0)
 
 const fallbackPoster = 'https://placehold.co/300x450/1a1a28/5e5e78?text=No+Poster'
 
@@ -84,6 +105,11 @@ const handleDislike = () => {
   setTimeout(() => {
     isDislikeDisabled.value = false
   }, 3000)
+}
+
+const handleRate = (star: number) => {
+  currentRating.value = star
+  emit('rate', props.movie.movieId, star)
 }
 
 const onImgError = (e: Event) => {
@@ -199,6 +225,7 @@ const onImgError = (e: Event) => {
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -207,6 +234,36 @@ const onImgError = (e: Event) => {
   font-size: 12px;
   color: var(--color-text-secondary);
   letter-spacing: 0.03em;
+}
+
+/* 评分组件 */
+.card-rating {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  align-items: center;
+}
+
+.star-icon {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: color 0.2s, transform 0.1s;
+}
+
+.star-icon svg {
+  transition: fill 0.2s, color 0.2s;
+}
+
+.star-icon:hover {
+  transform: scale(1.1);
+}
+
+.star-icon.active svg {
+  color: #fbbf24;
+}
+
+.star-icon svg.filled {
+  fill: #fbbf24;
 }
 
 /* 操作按钮 */

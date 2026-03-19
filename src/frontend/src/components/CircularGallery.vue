@@ -7,7 +7,7 @@ import { onMounted, onUnmounted, watch, useTemplateRef } from 'vue';
 import { Camera, Mesh, Plane, Program, Renderer, Texture, Transform } from 'ogl';
 
 interface CircularGalleryProps {
-  items?: { image: string; text: string }[];
+  items?: { image: string; text: string; value?: string }[];
   bend?: number;
   textColor?: string;
   borderRadius?: number;
@@ -169,6 +169,7 @@ interface MediaProps {
   scene: Transform;
   screen: { width: number, height: number };
   text: string;
+  value?: string;
   viewport: { width: number, height: number };
   bend: number;
   textColor: string;
@@ -187,6 +188,7 @@ class Media {
   scene: Transform;
   screen: { width: number, height: number };
   text: string;
+  value?: string;
   viewport: { width: number, height: number };
   bend: number;
   textColor: string;
@@ -214,6 +216,7 @@ class Media {
     scene,
     screen,
     text,
+    value,
     viewport,
     bend,
     textColor,
@@ -229,6 +232,7 @@ class Media {
     this.scene = scene;
     this.screen = screen;
     this.text = text;
+    this.value = value;
     this.viewport = viewport;
     this.bend = bend;
     this.textColor = textColor;
@@ -307,8 +311,24 @@ class Media {
     img.crossOrigin = 'anonymous';
     img.src = this.image;
     img.onload = () => {
-      texture.image = img;
-      this.program.uniforms.uImageSizes.value = [img.naturalWidth, img.naturalHeight];
+      // 缩放处理 / Image downscaling before embedding
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const MAX_WIDTH = 512;
+      const MAX_HEIGHT = 512;
+      let width = img.naturalWidth;
+      let height = img.naturalHeight;
+      if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+          const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
+          width = width * ratio;
+          height = height * ratio;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      ctx?.drawImage(img, 0, 0, width, height);
+
+      texture.image = canvas;
+      this.program.uniforms.uImageSizes.value = [width, height];
     };
   }
 
@@ -387,16 +407,17 @@ class Media {
     this.padding = this.width * 0.1;
     this.plane.scale.x = this.width - this.padding;
     
-    // 将占据高度限制从 0.75 降到 0.60，留出底部 40% 的黄金区域，这样两端因为 bend 向下弯曲的卡片和附加文字绝不会再掉出屏幕被裁切
-    this.plane.scale.y = Math.min(this.plane.scale.x / 1.33, this.viewport.height * 0.60);
+    // 专门为竖直 (约 16:9/竖拍) 规格修改的自适应高度计算：允许其高度达到宽度的 1.5倍 填满更多竖向空间
+    // 并且预留出 30% 底部空间给标签文本和圆弧弯折下坠
+    this.plane.scale.y = Math.min(this.plane.scale.x * 1.5, this.viewport.height * 0.70);
     
     this.plane.program.uniforms.uPlaneSizes.value = [this.plane.scale.x, this.plane.scale.y];
     
     // 重要修复：因为 title.mesh 是 plane 的子节点，会【二次继承】 plane 的巨幅 scale。
     // 如果直接把世界坐标差距塞给子节点，文字将被缩放无数倍并掉出画面。我们必须用目标世界坐标除以父级的 scale 转换为 local scale。
     if (this.title && this.title.mesh) {
-      // 1. 我们想要文字在世界中的高度是卡片高度的 20%
-      const desiredWorldHeight = this.plane.scale.y * 0.20;
+      // 1. 对于长图，文字在世界中的高度相对于卡片不应该太大，我们期望一个绝对的较小比例
+      const desiredWorldHeight = this.plane.scale.y * 0.15;
       const desiredWorldWidth = desiredWorldHeight * this.title.aspect;
       
       // 2. 抵消父节点缩放的影响，反向除以父节点比例以达到所期待的世界视觉宽/高
@@ -416,7 +437,7 @@ class Media {
 }
 
 interface AppConfig {
-  items?: { image: string; text: string }[];
+  items?: { image: string; text: string; value?: string }[];
   bend?: number;
   textColor?: string;
   borderRadius?: number;
@@ -443,7 +464,7 @@ class App {
   scene!: Transform;
   planeGeometry!: Plane;
   medias: Media[] = [];
-  mediasImages: { image: string; text: string }[] = [];
+  mediasImages: { image: string; text: string; value?: string }[] = [];
   screen!: { width: number; height: number };
   viewport!: { width: number; height: number };
   raf: number = 0;
@@ -508,7 +529,7 @@ class App {
   }
 
   createMedias(
-    items: { image: string; text: string }[] | undefined,
+    items: { image: string; text: string; value?: string }[] | undefined,
     bend: number = 1,
     textColor: string,
     borderRadius: number,
@@ -541,6 +562,7 @@ class App {
         scene: this.scene,
         screen: this.screen,
         text: data.text,
+        value: data.value,
         viewport: this.viewport,
         bend,
         textColor,
@@ -568,20 +590,40 @@ class App {
     this.scroll.target = (this.scroll.position ?? 0) + distance;
   }
 
-  onTouchUp() {
+  onTouchUp(e: any) {
     this.isDown = false;
-    this.onCheck();
     
-    if (!this.moved && (Date.now() - this.startTime < 200)) {
-      if (this.medias && this.medias[0]) {
-        const width = this.medias[0].width;
-        const index = Math.round(this.scroll.target / width);
-        const normalizedIndex = ((index % this.mediasImages.length) + this.mediasImages.length) % this.mediasImages.length;
-        const selectedItem = this.mediasImages[normalizedIndex];
-        if (selectedItem) {
-          this.onSelectCallback(selectedItem.text);
-        }
+    let clickedIndexOffset = 0;
+    let validClick = false;
+    
+    if (!this.moved && (Date.now() - this.startTime < 200) && e) {
+      const x = e.type === 'touchend' ? e.changedTouches[0].clientX : e.clientX;
+      if (x !== undefined) {
+        // 利用 getBoundingClientRect 因为容器可能在屏幕居中但并未铺满
+        const rect = this.container.getBoundingClientRect();
+        const relativeX = x - rect.left;
+        const centerOffset = relativeX - (this.screen.width / 2);
+        const itemPixels = this.screen.width / 5; // 取决于 onResize() 中写死的 visibleCount = 5
+        clickedIndexOffset = Math.round(centerOffset / itemPixels);
+        validClick = true;
       }
+    }
+
+    if (validClick && this.medias && this.medias[0]) {
+      const width = this.medias[0].width;
+      const centerScrollIndex = Math.round(this.scroll.target / width);
+      const targetIndex = centerScrollIndex + clickedIndexOffset;
+      
+      // 滑动并将画廊居中被点击元素
+      this.scroll.target = targetIndex * width;
+      
+      const normalizedIndex = ((targetIndex % this.mediasImages.length) + this.mediasImages.length) % this.mediasImages.length;
+      const selectedItem = this.mediasImages[normalizedIndex];
+      if (selectedItem) {
+        this.onSelectCallback(selectedItem.value || selectedItem.text);
+      }
+    } else {
+      this.onCheck();
     }
   }
 

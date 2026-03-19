@@ -15,30 +15,39 @@ export const useRecommendations = () => {
 
     /**
      * 拉取推荐列表
-     * GET /api/recommendations?userId={id}
      */
-    const fetchRecommendations = async (userId: number) => {
-        isLoading.value = true
+    const fetchRecommendations = async (userId: number, type: 'popular' | 'personalized' | 'all' = 'popular', page = 0, append = false) => {
+        if (!append) isLoading.value = true
         hasError.value = false
         errorMessage.value = ''
 
-        const url = `/api/recommendations?userId=${userId}`
-        console.log('[Recommendations] 请求:', url)
+        let url = `/api/recommendations/popular?topK=20`
+        if (type === 'personalized') {
+            url = `/api/recommendations?userId=${userId}&topK=20`
+        } else if (type === 'all') {
+            url = `/api/movies/all?page=${page}&size=50`
+        }
+
+        console.log(`[Recommendations] 请求 (${type}):`, url)
 
         try {
             const result: RecommendationResponse = await fetchWithAuth(url)
             console.log('[Recommendations] 响应数据:', result)
 
-            movies.value = result.data ?? []
+            if (append) {
+                movies.value = [...movies.value, ...(result.data ?? [])]
+            } else {
+                movies.value = result.data ?? []
+            }
             isColdStart.value = result.mode === 'cold-start'
         } catch (err) {
             console.error('[Recommendations] 请求失败:', err)
             hasError.value = true
             errorMessage.value = err instanceof Error ? err.message : '网络请求失败'
             // 降级为空列表，不阻塞 UI
-            movies.value = []
+            if (!append) movies.value = []
         } finally {
-            isLoading.value = false
+            if (!append) isLoading.value = false
         }
     }
 

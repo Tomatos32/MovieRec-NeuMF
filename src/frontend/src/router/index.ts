@@ -12,8 +12,42 @@ const router = createRouter({
         },
         {
             path: '/',
-            name: 'home',
+            redirect: '/popular'
+        },
+        {
+            path: '/popular',
+            name: 'popular',
             component: () => import('@/views/Home.vue'),
+            meta: { requiresAuth: true }
+        },
+        {
+            path: '/personalized',
+            name: 'personalized',
+            component: () => import('@/views/Home.vue'),
+            meta: { requiresAuth: true }
+        },
+        {
+            path: '/all',
+            name: 'all-movies',
+            component: () => import('@/views/Home.vue'),
+            meta: { requiresAuth: true }
+        },
+        {
+            path: '/history/browsing',
+            name: 'browsing-history',
+            component: () => import('@/views/Home.vue'),
+            meta: { requiresAuth: true }
+        },
+        {
+            path: '/history/rating',
+            name: 'rating-history',
+            component: () => import('@/views/Home.vue'),
+            meta: { requiresAuth: true }
+        },
+        {
+            path: '/profile',
+            name: 'profile',
+            component: () => import('@/views/Profile.vue'),
             meta: { requiresAuth: true }
         },
         {
