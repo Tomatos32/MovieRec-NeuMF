@@ -32,22 +32,30 @@ async def startup_event():
     global model
     print("[Sidecar] Loading NeuMF model weights into eval mode...")
     
-    # 模拟从环境变量或相对路径加载 .pth
     model_path = os.getenv("MODEL_PATH", "../model/model.pth")
     num_users = int(os.getenv("NUM_USERS", 200948))
     num_movies = int(os.getenv("NUM_MOVIES", 84432))
     
-    # 初始化模型结构
-    model = NeuMF(num_users=num_users, num_movies=num_movies)
-    
     if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        # 动态自适应探测：读取权重中的真正 Embedding 大小
+        state_dict = torch.load(model_path, map_location=device)
+        
+        # 探测 GMF 或 MLP 中的用户/电影 embedding 维度
+        if 'embedding_user_mlp.weight' in state_dict:
+            real_num_users = state_dict['embedding_user_mlp.weight'].shape[0]
+            real_num_movies = state_dict['embedding_movie_mlp.weight'].shape[0]
+            print(f"[Sidecar] Detected dimensions from weights: {real_num_users} users, {real_num_movies} movies.")
+            num_users = real_num_users
+            num_movies = real_num_movies
+            
+        model = NeuMF(num_users=num_users, num_movies=num_movies)
+        model.load_state_dict(state_dict)
         print(f"[Sidecar] Model loaded successfully from {model_path}.")
     else:
         print("[Sidecar] Warning: model.pth not found. Using randomly initialized weights for debugging.")
+        model = NeuMF(num_users=num_users, num_movies=num_movies)
         
     model.to(device)
-    # 锁定为求值模式，切断 dropout 和 batchnorm 更新
     model.eval()
 
 @app.post("/api/predict")
@@ -55,28 +63,49 @@ async def predict(request: PredictRequest) -> Dict:
     global model
     
     user_id = request.user_id
-    movie_ids = request.candidate_movie_ids
+    candidate_ids = request.candidate_movie_ids
     
-    if not movie_ids:
+    if not candidate_ids:
         return {"data": []}
         
-    # 构建 batch tensor 以利用 GPU 或 CPU 的矢量化加速
-    users_tensor = torch.full((len(movie_ids),), user_id, dtype=torch.long).to(device)
-    movies_tensor = torch.tensor(movie_ids, dtype=torch.long).to(device)
+    # ==========================================
+    # 核心安全审计：索引越界保护 (防范 CUDA Error)
+    # ==========================================
+    num_users_limit = model.embedding_user_mlp.num_embeddings
+    num_items_limit = model.embedding_movie_mlp.num_embeddings
     
-    # 极速非梯度推理 (避免内存泄漏与反代开销计算)
-    with torch.no_grad():
-        scores = model(users_tensor, movies_tensor)
+    # 1. 检查用户 ID 权限范围
+    if not (0 <= user_id < num_users_limit):
+        print(f"[Sidecar] Warning: UserID {user_id} is out of model bounds {num_users_limit}. Skipping.")
+        return {"data": [], "error": "User ID out of bounds"}
         
-    # 张量下放到 CPU 并转置列表
-    scores_list = scores.cpu().numpy().tolist()
+    # 2. 过滤电影 ID 权限范围
+    valid_movie_ids = [mid for mid in candidate_ids if 0 <= mid < num_items_limit]
     
-    # 将候选电影与预测分数配对，并按降序排列
-    results = [{"movie_id": mid, "score": score} for mid, score in zip(movie_ids, scores_list)]
-    results.sort(key=lambda x: x["score"], reverse=True)
-    
-    # 若要求返回 Top-K
-    return {"data": results[:request.top_k]}
+    if not valid_movie_ids:
+        print(f"[Sidecar] Warning: All candidate movie IDs out of bounds. Possible ID mapping mismatch.")
+        return {"data": []}
+
+    # 构建 batch tensor
+    try:
+        users_tensor = torch.full((len(valid_movie_ids),), user_id, dtype=torch.long).to(device)
+        movies_tensor = torch.tensor(valid_movie_ids, dtype=torch.long).to(device)
+        
+        # 极速非梯度推理
+        with torch.no_grad():
+            scores = model(users_tensor, movies_tensor)
+            
+        scores_list = scores.cpu().numpy().tolist()
+        
+        # 将结果与有效 ID 重新配对
+        results = [{"movie_id": mid, "score": score} for mid, score in zip(valid_movie_ids, scores_list)]
+        results.sort(key=lambda x: x["score"], reverse=True)
+        
+        return {"data": results[:request.top_k]}
+        
+    except Exception as e:
+        print(f"[Sidecar] Inference Exception: {e}")
+        return {"data": [], "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
