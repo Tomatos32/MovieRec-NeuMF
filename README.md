@@ -1,108 +1,68 @@
 # MovieRec-NNCF
 
 ## 项目概述
-MovieRec-NNCF 是一个基于神经矩阵分解（NeuMF）构建的双模工业级关联推荐引擎。本项目采用核心业务调度与深度学习推理相解耦的端到端微服务架构。在实现个性化推荐的同时，建立基于实时交互时间截的高可用冷启动降级策略及数据漂移监控机制。
+MovieRec-NNCF 是一个基于神经矩阵分解（NeuMF）的模型实现。该系统支持冷启动与个性化推荐两种模式，采用业务调度模块与深度学习推理模块分离的架构设计。系统设置了基于时间戳的冷启动降级逻辑，并具备数据监控功能，以保证推荐服务的稳定性。
 
-## 核心架构与工程设计
+## 系统架构与实现
 
-### 1. 业务网关与动态调度层 (Spring Boot)
-- **非阻塞 I/O**：使用基于 WebFlux/Reactor (Mono, ReactiveRedisTemplate) 的异步调用链路控制系统总资源。
-- **双模路由及熔断隔离 (Resilience4j)**：根据交互阈值判定冷启动状态，或向 FastAPI 侧下发推理请求。基于严格的超时中断（150ms 级别）实现网络隔离熔断，在模型挂起时自动降级提供安全兜底数据。
-- **混合缓存策略**：借由短效语义 Cache 和全平台 ZSET 热门榜单构成流量穿透屏障。
+### 1. 业务调度层 (Spring Boot)
+- **非阻塞 I/O**：采用 WebFlux 与 Reactor 框架实现异步调用，提高系统的并发处理能力。
+- **服务路由与容错 (Resilience4j)**：根据用户交互数据量自动切换冷启动模式或个性化推荐模式。设置了 150ms 的超时中断，在推理服务响应超时时自动回退至热门榜单数据。
+- **多级缓存**：通过 Redis 存储短效语义数据与热门榜单，减轻后台数据库查询压力。
 
-### 2. 模型推理边车 (PyTorch + FastAPI)
-- **神经计算与维度投射**：NeuMF 网络集成 GMF（广义矩阵分解）与 MLP（多层感知机）双通道嵌入隔离。利用塔式级联与权值衰减抑制过拟合。
-- **运行时环境保证**：模型服务在 `startup` 载入权重锁定为 Eval 模式；所有的请求合并至 `torch.no_grad()` 上下文流中执行快速批处理推演，最大程度消除显存侧泄漏风险。
+### 2. 模型推理模块 (PyTorch + FastAPI)
+- **神经网络结构**：集成 GMF（广义矩阵分解）与 MLP（多层感知机）双通道。通过独立的 Embedding 层映射用户与电影特征，并使用全连接层进行融合。
+- **性能优化**：推理服务启动时加载模型权重并设置为评估模式（Eval）。所有推理请求在 `torch.no_grad()` 上下文中运行，以减少显存占用并提高响应速度。
 
-### 3. 数据总线与离线计算环境 (Kafka + Python Pipeline)
-- **多端闭环反馈**：依托 Kafka 构建跨服务的事件流；包含用于捕捉临时兴趣迁移的在线侧消费集群 (`realtime-profiler`) 与维护长期一致性的落地存储 (`datalake-archiver`)。
-- **数据工程体系**：借助 Pandas/Dataset 构建涵盖：1:4 比例动态负采样、去极化隐式评分（1-5星二值隐性转换）与遵守未来不发生数据泄露（Future Data Leakage）的严格 Leave-One-Out 验证流划分。
-- **持久层结构设计**：
-  -  MySQL 8.0+ InnoDB 提供交互记录的范围分区主键定义与复合聚簇索引能力。
-  -  Redis 提供用于短期会话特征 (User Profile HASH) 维持的内存聚合。
+### 3. 数据处理与反馈管线 (Kafka + Python)
+- **数据采集与反馈**：利用 Kafka 收集用户交互事件。在线部分用于更新 Redis 中的用户画像；离线部分将全量事件存入数据库，供后续模型训练使用。
+- **数据工程**：使用 Pandas 处理 ML-32M 数据集。实现 1:4 的正负样本采样，并采用基于时间序列的 Leave-One-Out 方法划分数据集，防止数据泄露。
+- **存储方案**：
+  -  MySQL：存储电影元数据、用户基本信息及全量评分交互记录。
+  -  Redis：存储热点数据及用户短期会话特征。
 
-### 4. 前端视窗交互 (Vue 3 + Tailwind CSS)
-- **防高频攻击防护**：摒弃传统实现构建专用防抖（Debounce）及指令层拦截包装栈，规避恶意埋点的高频连击风险引发的总线震荡。
-- **视觉及动效工程**：使用 Composition + TS 特性重制网格卡片排列逻辑。依据 HTTP Response 类型触发界面无感知的“降级冷启动”微交互，配合骨架屏（Skeleton Loading）过渡网络延迟边界。
+### 4. 前端交互 (Vue 3 + Tailwind CSS)
+- **请求限流**：在前端设置防抖（Debounce）逻辑，限制用户高频操作对后端及消息队列产生的压力。
+- **界面逻辑**：采用 Vue 3 组合式 API 开发。支持深色模式切换，并根据后端返回的推荐模式（冷启动/个性化）动态调整界面提示状态。
 
 ## 目录结构
 ```text
 MovieRec-NNCF/
-├── data_pipeline/         # 负采样、清洗与离线流切分器
-├── docs/                  # 包含架构 SPEC 与追踪 TRACK 的相关规范文档
-├── inference/             # 基于 FastAPI + PyTorch 提供预测推演微服务
-├── model/                 # neuMF 神经网络层、激活及损失监控代码定义
-├── sql/                   # DDL 表结构与时间分区建立 SQL 实体脚本
-└── src/
-    ├── main/java/         # 核心路由管控中心、事件消费者及反馈探针业务代码
-    └── frontend/          # Vite + Vue 3 的前端资产
+30: ├── data_pipeline/         # 数据采样、清洗与离线集切分脚本
+31: ├── docs/                  # 系统设计文档与进度记录
+32: ├── inference/             # 基于 FastAPI + PyTorch 的推理服务
+33: ├── model/                 # 神经网络结构定义与增量训练脚本
+34: ├── sql/                   # 数据库表结构 DDL 脚本
+35: └── src/
+36:     ├── main/java/         # 业务路由、Kafka 消费者及数据持久化代码
+37:     └── frontend/          # Vue 3 前端代码
 ```
 
 ## 部署与启动指引
 
-1. **环境准备**
-   - JDK 17 及 Maven 构建链
-   - Python 3.8+ (CUDA 环境)，通过 `pip install -r inference/requirements.txt` 加载推理引擎所需依赖。
+1. **环境要求**
+   - JDK 17 / Maven
+   - Python 3.8+ (CUDA 12.x)
    - Node.js 18.x
 
-2. **数据库与流组件服务拉起**
-   - 请按本地环境确保实例开放（MySQL, Redis, Kafka Broker），并载入 `sql/schema.sql` 结构映射。
+2. **基础设施启动**
+   - 确保 MySQL, Redis, Kafka 服务正常运行。
+   - 执行 `sql/schema.sql` 完成表结构初始化。
 
-3. **数据准备与前置模型训练 (ML-32M)**
-   - 下载并解压 MovieLens 32M 数据集，将解压后的 `ratings.csv` 放置到预定路径（例如 `data/ratings.csv`）。详细参考 `ml-32m/ml-32m-README.md`。
-   - 配置环境：安装 Python 3.8+ (CUDA 环境)，通过 `pip install -r inference/requirements.txt` 加载推理引擎所需依赖。
-   - 运行数据预处理管道（`data_processor.py`），对 `ratings.csv` 执行：
-     - 用户/电影 ID 离散映射（从 0 开始连续化）
-     - 基于时间序列的严格 Leave-One-Out 划分法则切分训练/验证/测试集。
-     - 生成隐式反馈的 PyTorch Dataset，并且按 1:4 的正负比例进行 On-the-fly (OOT) 动态全集负采样。
-   - 启动 NeuMF 模型训练（`model/neumf.py` 内部包含了网络结构和单轮训练逻辑，需要建立专门的 main_train 脚本载入 DataLoader 运行）：
-     - 训练参数建议：`latent_dim=64`，批次大小根据 GPU 显存确定（如 1024/2048），`lr=1e-3`。
-     - **优化器约束**：我们采用定制的 Adam 优化器，仅对 MLP 通道的参数引入 `weight_decay=1e-4` (L2正则化)，而在 GMF 侧关闭衰减补偿。
-     - 训练完成后将权重持久化保存为 `model/model.pth`，并记下训练输出的 `num_users` 和 `num_movies`。
-   - 返回端到端模型配置，设置系统变量如：`export MODEL_PATH="../model/model.pth"` 等，以供推理服务注入。
+3. **数据准备与初始训练**
+   - 将 MovieLens 32M 数据集的 `ratings.csv` 放入指定目录。
+   - 运行 `data_pipeline/data_processor.py` 进行数据预处理。
+   - 运行模型训练脚本，训练完成后将权重保存为 `model/model.pth`。
 
-4. **环境变量配置**
-   - 复制 `.env.example` 为 `.env` 并填入实际值
-   - 训练产出的关键参数 (已写入 `.env.example`)：
+4. **服务启动**
+   - 使用 Docker Compose 一键启动基础设施：
      ```bash
-     NUM_USERS=200948
-     NUM_MOVIES=84432
-     MODEL_PATH="../model/model.pth"
+     docker-compose up -d
+     ```
+   - 启动 Spring Boot 后端主程序。
+   - 启动前端开发服务器：
+     ```bash
+     cd src/frontend && npm install && npm run dev
      ```
 
-## 部署与启动指引
-
-1. **基础设施一键拉起 (推荐)**
-   在根目录下执行，启动 Redis, Kafka 及推理服务：
-   ```bash
-   docker-compose up -d --build
-   ```
-
-2. **后端主业务启动 (Spring Boot)**
-   启动微服务核心调度中心 `MovieRecApplication`。该模块负责处理前端请求、调用端到端推理服务以及处理冷启动数据兜底逻辑。
-   - **IDE 方式**（推荐）：
-     在 IntelliJ IDEA 或 VS Code 中打开项目根目录，找到 `src/main/java/com/yourpackage/MovieRecApplication.java`（请根据实际包名确认路径），直接运行 `main` 方法。
-   - **命令行方式**：
-     在项目根目录下，使用 Maven Wrapper 运行：
-     ```bash
-     ./mvnw spring-boot:run
-     ```
-     或者先打包再运行：
-     ```bash
-     ./mvnw clean package -DskipTests
-     java -jar target/movie-rec-nncf-0.0.1-SNAPSHOT.jar
-     ```
-   - **关键检查点**：
-     - 确保控制台输出 `Started MovieRecApplication` 且未报告 Redis/Kafka 连接异常。
-     - 默认监听端口通常为 `8080` (可通过 `application.yml` 修改)。
-
-3. **前端呈现层启动**
-   ```bash
-   cd src/frontend
-   npm install
-   npm run dev
-   ```
-   访问地址：`http://localhost:5173`
-
-
-更多任务及交付点梳理参见 [TODO_MovieRec](./docs/MovieRec/TODO_MovieRec.md)。
+更多详细信息请参考 [Incremental_Training_Summary.md](./docs/MovieRec/Incremental_Training_Summary.md)。
