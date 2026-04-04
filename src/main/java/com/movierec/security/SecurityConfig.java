@@ -47,6 +47,7 @@ public class SecurityConfig {
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers(HttpMethod.OPTIONS).permitAll()
                         .pathMatchers("/api/auth/**").permitAll()
+                        .pathMatchers("/api/recommendations/**").permitAll()
                         .anyExchange().authenticated()
                 )
                 .build();

@@ -115,33 +115,24 @@ public class RecommendationService {
         return new RecommendationResult(data, mode);
     }
 
-    /**
-     * 模式 B: 从语义缓存拉取，若未中则请求 FastAPI Sidecar 进行推断
-     */
     private Mono<List<Long>> getPersonalizedRecommendation(Long userId, int topK) {
-        String cacheKey = "cache:semantic:" + userId;
-        return redisTemplate.opsForValue().get(cacheKey)
-                .flatMap(cachedJson -> {
-                    try {
-                        List<Long> cachedMovies = objectMapper.readValue(cachedJson,
-                            objectMapper.getTypeFactory().constructCollectionType(List.class, Long.class));
-                        return Mono.just(cachedMovies);
-                    } catch (Exception e) {
-                        return Mono.empty(); // fallback to sidecar if parsing fails
+        String offlineKey = "rec:offline:" + userId;
+        // 第一优先级：从刚刚生成的高速离线推断池中捞取
+        return redisTemplate.opsForList().range(offlineKey, 0, topK - 1)
+                .map(Long::valueOf)
+                .collectList()
+                .flatMap(offlineList -> {
+                    if (!offlineList.isEmpty()) {
+                        return Mono.just(offlineList);
                     }
-                })
-                .switchIfEmpty(Mono.defer(() -> invokeSidecarInference(userId, topK)));
+                    // 第二优先级：如果没有命中离线结果，实时请求推断
+                    return invokeSidecarInference(userId, topK);
+                });
     }
 
-    /**
-     * 异步调用 FastAPI 边车微服务
-     * 结合 Resilience4j 做断路器与极其严格的网络超时(150ms)保护
-     */
-    @CircuitBreaker(name = "fastApiInference", fallbackMethod = "sidecarFallback")
-    @TimeLimiter(name = "fastApiInference")
     private Mono<List<Long>> invokeSidecarInference(Long userId, int topK) {
-        // 核心优化：不再使用 Dummy Data，而是将实时 I2I 召回的候选集送入 NCF 模型进行精准排序
-        return getFastTrackRecommendations(userId, 50) // 获取 50 个高相关候选
+        // 核心优化：将实时 I2I 召回的候选集送入 NCF 模型进行精准排序
+        return getFastTrackRecommendations(userId, 50)
                 .flatMap(candidates -> {
                     List<Long> finalCandidates = candidates;
                     if (finalCandidates.isEmpty()) {
@@ -149,7 +140,10 @@ public class RecommendationService {
                         return getPopularFallback(50).flatMap(popular -> doInference(userId, popular, topK));
                     }
                     return doInference(userId, finalCandidates, topK);
-                });
+                })
+                // 解决 Spring AOP private 方法注解失效漏洞，强制手动 TimeLimiter (300ms) 与 CircuitBreaker Fallback
+                .timeout(Duration.ofMillis(300))
+                .onErrorResume(t -> sidecarFallback(userId, topK, t));
     }
 
     private Mono<List<Long>> doInference(Long userId, List<Long> candidateIds, int topK) {

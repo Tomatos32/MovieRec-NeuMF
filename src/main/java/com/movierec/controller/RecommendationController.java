@@ -39,9 +39,9 @@ public class RecommendationController {
                 )))
                 .onErrorResume(ex -> Mono.just(ResponseEntity.internalServerError().body(Map.of(
                         "code", 500,
-                        "message", "推荐服务异常: " + ex.getMessage(),
+                        "message", "推荐服务极度繁忙, 触发熔断保护: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()),
                         "data", java.util.Collections.emptyList(),
-                        "mode", "cold-start",
+                        "mode", "system-fallback",
                         "userId", userId
                 ))));
     }

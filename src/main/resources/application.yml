@@ -10,6 +10,11 @@ spring:
     url: r2dbc:mysql://localhost:3306/movierec_db?serverZoneId=Asia/Shanghai
     username: root
     password: 123456
+    pool:
+      initial-size: 20
+      max-size: 200
+      max-idle-time: 30m
+      max-life-time: 60m
 
   # Redis Configuration (Reactive WebFlux support)
   data:
@@ -18,10 +23,10 @@ spring:
       port: 6379
       lettuce:
         pool:
-          max-active: 8
-          max-wait: -1ms
-          max-idle: 8
-          min-idle: 0
+          max-active: 200
+          max-wait: 2000ms
+          max-idle: 50
+          min-idle: 10
       timeout: 5000ms
 
   # Kafka Configuration
@@ -62,3 +67,11 @@ movierec:
     url: http://localhost:8000
     endpoints:
       predict: /api/predict
+
+logging:
+  level:
+    root: INFO                # 全局保持 INFO，避免系统日志刷屏
+    com.movierec: DEBUG       # 将你自己的业务包设为 DEBUG（最有用）
+    org.springframework.web: DEBUG # 查看 Web 请求和响应详情
+    io.github.resilience4j: DEBUG  # 实时查看熔断器状态变化（强烈推荐用于性能测试）
+
