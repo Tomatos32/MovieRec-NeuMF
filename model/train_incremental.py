@@ -173,7 +173,7 @@ def run_incremental_training(model_path, db_config):
     # ==========================
     # 4. 参数冻结与优化器状态重置
     # ==========================
-    # 挂载冻结狗子，锁定所有旧的老 ID 向量
+    # 挂载冻结钩子，锁定所有旧的老 ID 向量
     model.embedding_user_mlp.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_users))
     model.embedding_user_mf.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_users))
     model.embedding_item_mlp.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_movies))

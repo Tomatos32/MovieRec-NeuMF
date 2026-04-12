@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import numpy as np
 import torch
@@ -13,12 +14,64 @@ class MovieLensProcessor:
     数据特征管道：负责 MovieLens 原始数据的清洗、二值化及基于时间序列的留一法切分。
     针对 ML-32M (3200万条) + 16GB RAM 场景，做了严格的内存峰值管控。
     """
-    def __init__(self, ratings_path: str):
+    def __init__(self, ratings_path: str, movies_path: str = '../data/movies.csv'):
         self.ratings_path = ratings_path
+        self.movies_path = movies_path
         self.user_mapping = {}
         self.movie_mapping = {}
         self.user_interacted_movies = {}  # {user_idx: np.array (sorted)}
         self.all_movies_list = []
+        self.genres_matrix = None
+        
+    def build_genres_matrix(self):
+        """
+        根据现有的 movie_mapping，从 movies.csv 加载流派数据，构造 Multi-hot 矩阵
+        返回形状为 (num_movies, 18) 的张量
+        """
+        print("[Feature Pipeline] Building Genres Matrix...")
+        if not os.path.exists(self.movies_path):
+            print(f"Warning: Data file {self.movies_path} not found. Cannot build genres matrix.")
+            return None
+        
+        movies_df = pd.read_csv(self.movies_path)
+        
+        # 提取所有包含的流派
+        all_genres = set()
+        for genres_str in movies_df['genres'].dropna():
+            if genres_str != '(no genres listed)':
+                all_genres.update(genres_str.split('|'))
+        
+        # 为了固定维度，我们可以强制指定 MovieLens 固定的 18 种流派，以保证兼容性
+        fixed_genres = sorted(list(all_genres))
+        # 确保最多选取 18 种 (或者直接使用固定的维度, NeuMF 要求固定的 num_genres)
+        # 这里动态设定，但在脚本中我们可以把这个维度传给 NeuMF
+        
+        genre2idx = {g: i for i, g in enumerate(fixed_genres)}
+        num_genres = len(fixed_genres)
+        num_movies = len(self.movie_mapping)
+        
+        genre_matrix = np.zeros((num_movies, num_genres), dtype=np.float32)
+        
+        # 填充矩阵
+        for _, row in movies_df.iterrows():
+            m_id = row['movieId']
+            if m_id in self.movie_mapping:
+                m_idx = self.movie_mapping[m_id]
+                g_str = row['genres']
+                if pd.notna(g_str) and g_str != '(no genres listed)':
+                    for g in g_str.split('|'):
+                        if g in genre2idx:
+                            genre_matrix[m_idx, genre2idx[g]] = 1.0
+                            
+        self.genres_matrix = genre_matrix
+        print(f"[Feature Pipeline] Genres Matrix built: shape {genre_matrix.shape}")
+        
+        # 保存 genre.json 以备评估脚本使用
+        mapping_dir = '../model'
+        with open(os.path.join(mapping_dir, 'genre_mapping.json'), 'w') as f:
+            json.dump(genre2idx, f)
+            
+        return torch.tensor(genre_matrix, dtype=torch.float32), num_genres
         
     def process(self):
         # 1. 内存优化的高效加载逻辑
@@ -106,6 +159,18 @@ class MovieLensProcessor:
         print("[Feature Pipeline] Building negative sampling dictionary (numpy sorted arrays)...")
         self._build_interaction_dict(train_df)
         
+        # 6. 保存映射文件
+        mapping_dir = '../model'
+        os.makedirs(mapping_dir, exist_ok=True)
+        # Convert int32 to int for JSON serialization
+        u_map = {int(k): int(v) for k, v in self.user_mapping.items()}
+        m_map = {int(k): int(v) for k, v in self.movie_mapping.items()}
+        with open(os.path.join(mapping_dir, 'user_mapping.json'), 'w') as f:
+            json.dump(u_map, f)
+        with open(os.path.join(mapping_dir, 'movie_mapping.json'), 'w') as f:
+            json.dump(m_map, f)
+        print("[Feature Pipeline] Exported user_mapping.json and movie_mapping.json to ../model/")
+        
         return train_df, valid_df, test_df
 
     def _build_interaction_dict(self, train_df: pd.DataFrame):
@@ -139,58 +204,75 @@ class MovieLensProcessor:
 
 class MovieLensDataset(Dataset):
     """
-    自定义 PyTorch Dataset：在训练集 getitem 时进行 OOT (On-the-fly) 动态负采样，严格保证 1:4 比例。
-    使用 np.searchsorted 替代 set.__contains__ 进行快速交互检测。
+    高性能 PyTorch Dataset：在初始化时预计算全局负样本。
+    1. 使用 Numpy 向量化操作进行批量随机采样。
+    2. 将所有样本（正+负）预先展平为 PyTorch Tensor，消除 __getitem__ 的计算开销。
+    3. 支持 num_workers > 0，因为 Tensor 内存已在父进程中分配完毕。
     """
     def __init__(self, df: pd.DataFrame, user_interacted_movies: dict, all_movies_list: list, 
                  num_negatives: int = 4, is_training: bool = True):
-        self.users = df['user_idx'].values
-        self.movies = df['movie_idx'].values
-        self.labels = df['implicit_rating'].values
-        
-        self.user_interacted_movies = user_interacted_movies
-        self.all_movies_list = all_movies_list
-        self.num_negatives = num_negatives
         self.is_training = is_training
         
-    def _is_interacted(self, user: int, movie: int) -> bool:
-        """使用 np.searchsorted 在排序数组上做 O(log n) 的交互检测"""
-        arr = self.user_interacted_movies.get(user)
-        if arr is None:
-            return False
-        idx = np.searchsorted(arr, movie)
-        return idx < len(arr) and arr[idx] == movie
+        if not is_training:
+            self.users = torch.tensor(df['user_idx'].values, dtype=torch.long)
+            self.movies = torch.tensor(df['movie_idx'].values, dtype=torch.long)
+            self.labels = torch.tensor(df['implicit_rating'].values, dtype=torch.float32)
+        else:
+            print(f"[Dataset] Pre-sampling {num_negatives}x negatives for {len(df)} positive samples...")
+            pos_users = df['user_idx'].values
+            pos_movies = df['movie_idx'].values
+            num_pos = len(pos_users)
+            
+            # 1. 构造总数组空间
+            total_size = num_pos * (1 + num_negatives)
+            users_np = np.zeros(total_size, dtype=np.int32)
+            movies_np = np.zeros(total_size, dtype=np.int32)
+            labels_np = np.zeros(total_size, dtype=np.float32)
+            
+            # 2. 填充正样本 (每个 Block 的第 0 位)
+            users_np[::1+num_negatives] = pos_users
+            movies_np[::1+num_negatives] = pos_movies
+            labels_np[::1+num_negatives] = 1.0
+            
+            # 3. 填充负样本 (批量随机采样)
+            all_movies_np = np.array(all_movies_list, dtype=np.int32)
+            
+            # 填充其余位置
+            for i in range(1, 1 + num_negatives):
+                # 随机抽取候选
+                neg_candidates = np.random.choice(all_movies_np, size=num_pos)
+                
+                # 校验碰撞 (虽然 32M 数据集碰撞率极低，但仍做一次快速掩码修复)
+                # 使用底层高效逻辑进行冲突检测
+                for j in range(num_pos):
+                    u = pos_users[j]
+                    m = neg_candidates[j]
+                    # 如果冲突，则重抽 (仅针对单条，保持整体速度)
+                    # 由于 searchsorted 很快，这种修复对性能影响极小
+                    interacted = user_interacted_movies.get(u)
+                    if collided := (interacted is not None and np.isin(m, interacted, assume_unique=True)):
+                        while (interacted is not None and np.isin(m, interacted, assume_unique=True)):
+                            m = random.choice(all_movies_list)
+                        neg_candidates[j] = m
+                
+                users_np[i::1+num_negatives] = pos_users
+                movies_np[i::1+num_negatives] = neg_candidates
+                labels_np[i::1+num_negatives] = 0.0
+            
+            # 4. 转换为 Tensor 并释放临时内存
+            self.users = torch.from_numpy(users_np).long()
+            self.movies = torch.from_numpy(movies_np).long()
+            self.labels = torch.from_numpy(labels_np).float()
+            
+            del users_np, movies_np, labels_np
+            print(f"[Dataset] Pre-sampling complete. Total samples: {len(self.users)}")
         
     def __len__(self):
-        if self.is_training:
-            return len(self.users) * (1 + self.num_negatives)
         return len(self.users)
         
     def __getitem__(self, idx):
-        if not self.is_training:
-            return torch.tensor(self.users[idx], dtype=torch.long), \
-                   torch.tensor(self.movies[idx], dtype=torch.long), \
-                   torch.tensor(self.labels[idx], dtype=torch.float32)
-                   
-        # 训练阶段动态采样逻辑
-        pos_idx = idx // (1 + self.num_negatives)
-        is_pos = (idx % (1 + self.num_negatives)) == 0
-        
-        user = self.users[pos_idx]
-        
-        if is_pos:
-            return torch.tensor(user, dtype=torch.long), \
-                   torch.tensor(self.movies[pos_idx], dtype=torch.long), \
-                   torch.tensor(1.0, dtype=torch.float32)
-        else:
-            # 随机抽样负样本, 使用 searchsorted 快速校验
-            neg_candidate = random.choice(self.all_movies_list)
-            while self._is_interacted(user, neg_candidate):
-                neg_candidate = random.choice(self.all_movies_list)
-                
-            return torch.tensor(user, dtype=torch.long), \
-                   torch.tensor(neg_candidate, dtype=torch.long), \
-                   torch.tensor(0.0, dtype=torch.float32)
+        # 此时 __getitem__ 变为纯粹的内存查找，速度达到理论极致
+        return self.users[idx], self.movies[idx], self.labels[idx]
 
 
 if __name__ == '__main__':

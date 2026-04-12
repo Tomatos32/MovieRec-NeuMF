@@ -41,6 +41,9 @@ def main():
     num_movies = len(processor.movie_mapping)
     print(f"    - 总用户数: {num_users}, 总电影数: {num_movies}")
 
+    # ===== 2.1 构建元数据 (Genres) =====
+    genres_matrix, num_genres = processor.build_genres_matrix()
+
     # ===== 3. 构建 PyTorch Dataset 与 DataLoader =====
     print("\n>>> 2. 构建 Dataset 与动态负采样 DataLoader...")
     train_dataset = MovieLensDataset(
@@ -51,25 +54,22 @@ def main():
         is_training=True
     )
 
-    # RTX 3060 Laptop (6GB VRAM) 下的合理配置
-    # 注意: ML-32M 的负采样字典在内存中很大，多 worker 会导致内存翻倍 MemoryError
-    # 因此 num_workers=0 使用主进程加载，GPU 计算速度足以覆盖
     use_cuda = device.type == "cuda"
-    batch_size = 4096
+    batch_size = 16384  # 核心优化：充分利用 GPU 吞吐量
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=4,  # 已静态化 Tensor，开启多线程毫无压力
         pin_memory=use_cuda,
     )
 
     # ===== 4. 初始化模型 =====
     latent_dim = 64
-    print(f"\n>>> 3. 初始化 NeuMF 模型 (Latent Dim = {latent_dim})...")
+    print(f"\n>>> 3. 初始化 NeuMF 模型 (Latent Dim = {latent_dim}, Num Genres = {num_genres})...")
     print(f"    - 使用计算设备: {device}")
 
-    model = NeuMF(num_users=num_users, num_movies=num_movies, latent_dim=latent_dim)
+    model = NeuMF(num_users=num_users, num_movies=num_movies, latent_dim=latent_dim, num_genres=num_genres)
     model.to(device)
 
     # 估算模型参数量
@@ -81,9 +81,9 @@ def main():
     optimizer = get_optimizer(model, lr=1e-3, weight_decay=1e-4)
     criterion = nn.BCELoss()
 
-    # ===== 6. 开始训练 =====
-    epochs = 3
-    print(f"\n>>> 5. 开始训练 (Total Epochs: {epochs})...")
+    # ===== 6. 开始正式训练 =====
+    epochs = 3  
+    print(f"\n>>> 5. 开始正式训练 (Total Epochs: {epochs})...")
 
     # 确保保存模型的目录存在
     os.makedirs('../model', exist_ok=True)
@@ -92,7 +92,7 @@ def main():
         print(f"\n--- Epoch {epoch}/{epochs} ---")
         epoch_start = time.time()
 
-        avg_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        avg_loss = train_one_epoch(model, train_loader, optimizer, criterion, device, global_genres_matrix=genres_matrix)
 
         epoch_time = time.time() - epoch_start
         print(f"    - Epoch {epoch} 完毕 | 平均损失: {avg_loss:.4f} | 耗时: {epoch_time:.1f}s")

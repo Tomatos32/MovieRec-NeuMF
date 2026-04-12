@@ -61,9 +61,12 @@ def evaluate_model():
     print(f"Hit Ratio\t{hr_means[5]:.4f}\t{hr_means[10]:.4f}\t{hr_means[15]:.4f}\t{hr_means[20]:.4f}")
     print(f"NDCG     \t{ndcg_means[5]:.4f}\t{ndcg_means[10]:.4f}\t{ndcg_means[15]:.4f}\t{ndcg_means[20]:.4f}")
     
-    # Generate Chart for Thesis
-    if not os.path.exists("docs/MovieRec/charts"):
-        os.makedirs("docs/MovieRec/charts")
+    # Get project root (parent directory of 'scripts')
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    chart_dir = os.path.join(base_dir, "docs", "MovieRec", "charts")
+    
+    if not os.path.exists(chart_dir):
+        os.makedirs(chart_dir)
         
     fig, ax1 = plt.subplots(figsize=(8, 5))
 
@@ -80,12 +83,42 @@ def evaluate_model():
     ax2.tick_params(axis='y', labelcolor=color)
 
     fig.tight_layout()
-    plt.title("NeuMF Top-K Performance on MovieLens 1M Dataset")
+    plt.title("NeuMF Top-K Performance on MovieLens 32M Dataset")
     plt.grid(True, linestyle='--', alpha=0.5)
     
-    chart_path = "docs/MovieRec/charts/neumf_performance.png"
+    chart_path = os.path.join(chart_dir, "neumf_performance.png")
     plt.savefig(chart_path)
-    print(f"\nChart saved to {chart_path} for your thesis!")
+    print(f"\nChart saved to: {chart_path}")
+    
+    # Save Tables for Word/Thesis
+    table_md_path = os.path.join(chart_dir, "evaluation_metrics.md")
+    table_csv_path = os.path.join(chart_dir, "evaluation_metrics.csv")
+    
+    # Markdown Table
+    md_content = f"""| Metrics | @5 | @10 | @15 | @20 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Hit Ratio** | {hr_means[5]:.4f} | {hr_means[10]:.4f} | {hr_means[15]:.4f} | {hr_means[20]:.4f} |
+| **NDCG** | {ndcg_means[5]:.4f} | {ndcg_means[10]:.4f} | {ndcg_means[15]:.4f} | {ndcg_means[20]:.4f} |
+"""
+    with open(table_md_path, "w", encoding="utf-8") as f:
+        f.write(md_content)
+    
+    # CSV Table
+    csv_content = f"Metrics,@5,@10,@15,@20\n"
+    csv_content += f"Hit Ratio,{hr_means[5]:.4f},{hr_means[10]:.4f},{hr_means[15]:.4f},{hr_means[20]:.4f}\n"
+    csv_content += f"NDCG,{ndcg_means[5]:.4f},{ndcg_means[10]:.4f},{ndcg_means[15]:.4f},{ndcg_means[20]:.4f}\n"
+    with open(table_csv_path, "w", encoding="utf-8") as f:
+        f.write(csv_content)
+        
+    print(f"Table (Markdown) saved to: {table_md_path}")
+    print(f"Table (CSV) saved to: {table_csv_path}")
+
+    # Try to show the plot if possible
+    try:
+        print("\nDisplaying chart window...")
+        plt.show()
+    except Exception as e:
+        print(f"Could not display chart window: {e}")
 
 if __name__ == "__main__":
     evaluate_model()

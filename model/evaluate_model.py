@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from math import log2
-from neumf import NeuMF
+from neumf import NeuMF, NeuMFNoConcat
 
 # ==========================================
 # 1. 评估数据抽取 (Leave-One-Out 留一法)
@@ -88,34 +88,15 @@ import matplotlib.pyplot as plt
 # ==========================================
 # 3. 执行核心评测逻辑
 # ==========================================
-def evaluate_model(model_path, db_config, k_list=[5, 10, 15, 20]):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Loading pre-trained model on {device}...")
-    
-    num_users = int(os.environ.get('NUM_USERS', 200948))
-    num_movies = int(os.environ.get('NUM_MOVIES', 84432))
-    
-    model = NeuMF(num_users=num_users, num_movies=num_movies, mf_dim=64, layers=[256, 128, 64]).to(device)
-    try:
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.eval()
-    except Exception as e:
-        print(f"Failed to load model weights: {e}")
-        return
-
-    test_data = fetch_evaluation_data(db_config, limit_users=100)
-    if not test_data:
-        print("No evaluation data generated.")
-        return
-
-    # 存储不同 K 下的结果
+def evaluate_single_model(model, test_data, k_list, device, desc="Inferencing"):
+    """执行单个模型的评测核心计算逻辑"""
+    model.eval()
     hr_means = []
     ndcg_means = []
     
     with torch.no_grad():
-        # 我们先一次性跑完推理得分，再计算不同 K，提升效率
         all_hits = []
-        for row in tqdm(test_data, desc="Inferencing"):
+        for row in tqdm(test_data, desc=desc):
             u = row['user']
             test_items = [row['pos_item']] + row['neg_items']
             user_tensor = torch.full((len(test_items),), u, dtype=torch.long, device=device)
@@ -132,32 +113,82 @@ def evaluate_model(model_path, db_config, k_list=[5, 10, 15, 20]):
             ndcg_list = [ndcg_at_k(h, k=k) for h in all_hits]
             hr_means.append(np.mean(hits_list))
             ndcg_means.append(np.mean(ndcg_list))
+            
+    return hr_means, ndcg_means
 
-    print("\n" + "="*40)
-    print("======  NeuMF Model Evaluation  ======")
-    print("="*40)
+def evaluate_and_compare(model_path, noconcat_model_path, db_config, k_list=[5, 10, 15, 20]):
+    """分别评测 NeuMF(包含向量拼接) 与 NeuMFNoConcat(不包含向量拼接)，并绘制全量对比图"""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Running comparative evaluation on {device}...")
+    
+    num_users = int(os.environ.get('NUM_USERS', 200948))
+    num_movies = int(os.environ.get('NUM_MOVIES', 84432))
+    
+    test_data = fetch_evaluation_data(db_config, limit_users=100)
+    if not test_data:
+        print("No evaluation data generated.")
+        return
+
+    # 1. 评测标准 NeuMF
+    model_standard = NeuMF(num_users=num_users, num_movies=num_movies, mf_dim=64, layers=[256, 128, 64]).to(device)
+    if os.path.exists(model_path):
+        model_standard.load_state_dict(torch.load(model_path, map_location=device))
+        print(f"Standard NeuMF weights loaded from {model_path}.")
+    else:
+        print("Standard NeuMF weights NOT found, using random initialization.")
+
+    print("\n--- Evaluating Standard NeuMF (With Concatenation) ---")
+    hr_std, ndcg_std = evaluate_single_model(model_standard, test_data, k_list, device, desc="NeuMF Inferencing")
+
+    # 2. 评测对比组 NeuMFNoConcat
+    model_noconcat = NeuMFNoConcat(num_users=num_users, num_movies=num_movies, latent_dim=64).to(device)
+    if os.path.exists(noconcat_model_path):
+        model_noconcat.load_state_dict(torch.load(noconcat_model_path, map_location=device))
+        print(f"NeuMFNoConcat weights loaded from {noconcat_model_path}.")
+    else:
+        print(f"NeuMFNoConcat weights NOT found from {noconcat_model_path}, using random initialization. (Note: Generate this file by training NeuMFNoConcat first)")
+
+    print("\n--- Evaluating NeuMF Without Concatenation ---")
+    hr_no, ndcg_no = evaluate_single_model(model_noconcat, test_data, k_list, device, desc="NeuMFNoConcat Inferencing")
+
+    # 3. 打印对比表格结果
+    print("\n" + "="*80)
+    print("======  Models Performance Comparison (Ablation Study)  ======")
+    print("="*80)
     print(f"Test Users count: {len(test_data)}")
-    print(f"Top-K\tHit Ratio\tNDCG")
+    print(f"Top-K\tHR (Std)\tHR (NoCat)\tNDCG (Std)\tNDCG (NoCat)")
     for i, k in enumerate(k_list):
-        print(f"@{k}\t{hr_means[i]:.4f}\t\t{ndcg_means[i]:.4f}")
-    print("="*40)
+        print(f"@{k}\t{hr_std[i]:.4f}\t\t{hr_no[i]:.4f}\t\t{ndcg_std[i]:.4f}\t\t{ndcg_no[i]:.4f}")
+    print("="*80)
 
-    # 生成图表用于毕设论文
+    # 4. 生成对比图表
     if not os.path.exists("../docs/MovieRec/charts"):
         os.makedirs("../docs/MovieRec/charts")
         
-    plt.figure(figsize=(8, 5))
-    plt.plot(k_list, hr_means, marker='o', label='Hit Ratio')
-    plt.plot(k_list, ndcg_means, marker='s', label='NDCG')
-    plt.xlabel('Top-K')
-    plt.ylabel('Score')
-    plt.title('NeuMF Model Performance Evaluation')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     
-    chart_path = "../docs/MovieRec/charts/model_performance_real.png"
+    # HR 对比
+    ax1.plot(k_list, hr_std, marker='o', color='#1f77b4', linestyle='-', label='NeuMF (With Concat)')
+    ax1.plot(k_list, hr_no, marker='s', color='#ff7f0e', linestyle='--', label='NeuMF (No Concat)')
+    ax1.set_xlabel('Top-K')
+    ax1.set_ylabel('Hit Ratio (HR)')
+    ax1.set_title('Hit Ratio Comparison')
+    ax1.legend()
+    ax1.grid(True, linestyle='--', alpha=0.6)
+    
+    # NDCG 对比
+    ax2.plot(k_list, ndcg_std, marker='o', color='#2ca02c', linestyle='-', label='NeuMF (With Concat)')
+    ax2.plot(k_list, ndcg_no, marker='s', color='#d62728', linestyle='--', label='NeuMF (No Concat)')
+    ax2.set_xlabel('Top-K')
+    ax2.set_ylabel('NDCG')
+    ax2.set_title('NDCG Comparison')
+    ax2.legend()
+    ax2.grid(True, linestyle='--', alpha=0.6)
+    
+    plt.tight_layout()
+    chart_path = "../docs/MovieRec/charts/model_ablation_comparison.png"
     plt.savefig(chart_path)
-    print(f"\nEvaluation chart saved to {chart_path}")
+    print(f"\nComparative evaluation chart saved to {chart_path}")
 
 if __name__ == '__main__':
     db_config = {
@@ -168,4 +199,5 @@ if __name__ == '__main__':
         'database': 'movierec_db'
     }
     model_path = '../model/model.pth'
-    evaluate_model(model_path, db_config)
+    noconcat_model_path = '../model/model_noconcat.pth'
+    evaluate_and_compare(model_path, noconcat_model_path, db_config)
