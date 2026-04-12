@@ -61,16 +61,16 @@ public class RecommendationService {
                         return getFastTrackRecommendations(userId, topK)
                                 .flatMap(fastIds -> {
                                     if (!fastIds.isEmpty()) {
-                                        return enrichMovieIds(fastIds, "fast-track-i2i", topK);
+                                        return enrichMovieIds(userId, fastIds, "fast-track-i2i", topK);
                                     }
                                     // 彻底没数据，回退至热门模式 A
                                     return getPopularFallback(topK)
-                                            .flatMap(movieIds -> enrichMovieIds(movieIds, "cold-start", topK));
+                                            .flatMap(movieIds -> enrichMovieIds(userId, movieIds, "cold-start", topK));
                                 });
                     } else {
                         // 模式 B: 深度个性化推荐 (融合了离线 NeuMF 和 在线 I2I 候选)
                         return getPersonalizedRecommendation(userId, topK)
-                                .flatMap(movieIds -> enrichMovieIds(movieIds, "personalized", topK));
+                                .flatMap(movieIds -> enrichMovieIds(userId, movieIds, "personalized", topK));
                     }
                 });
     }
@@ -78,39 +78,60 @@ public class RecommendationService {
     /**
      * 强行获取热门推荐
      */
-    public Mono<RecommendationResult> getPopularRecommendations(int topK) {
+    public Mono<RecommendationResult> getPopularRecommendations(Long userId, int topK) {
         return getPopularFallback(topK)
-                .flatMap(movieIds -> enrichMovieIds(movieIds, "popular", topK));
+                .flatMap(movieIds -> enrichMovieIds(userId, movieIds, "popular", topK));
     }
 
     /**
      * 将 movieId 列表查数据库补全为完整的 Movie 信息
      * 如果 movieId 列表为空，降级从数据库直接拉一批电影兜底
      */
-    private Mono<RecommendationResult> enrichMovieIds(List<Long> movieIds, String mode, int topK) {
+    private Mono<RecommendationResult> enrichMovieIds(Long userId, List<Long> movieIds, String mode, int topK) {
         if (movieIds == null || movieIds.isEmpty()) {
             // Redis 无数据时，直接从数据库拉取兜底
             return movieRepository.findTopMovies(topK)
                     .collectList()
-                    .map(movies -> toResult(movies, mode));
+                    .flatMap(movies -> attachRatings(userId, movies, mode));
         }
         return movieRepository.findAllByIdIn(movieIds)
                 .collectList()
-                .map(movies -> toResult(movies, mode));
+                .flatMap(movies -> attachRatings(userId, movies, mode));
+    }
+
+    private Mono<RecommendationResult> attachRatings(Long userId, List<Movie> movies, String mode) {
+        if (userId == null) {
+            return Mono.just(toResult(movies, mode, Collections.emptyMap()));
+        }
+        List<Long> movieIds = movies.stream().map(Movie::getId).collect(Collectors.toList());
+        return ratingRepository.findAllByUserIdAndMovieIdIn(userId, movieIds)
+                .collectList()
+                .map(ratings -> {
+                    Map<Long, Double> ratingMap = ratings.stream()
+                            .collect(Collectors.toMap(com.movierec.entity.Rating::getMovieId, com.movierec.entity.Rating::getRating));
+                    return toResult(movies, mode, ratingMap);
+                })
+                .defaultIfEmpty(toResult(movies, mode, Collections.emptyMap()));
     }
 
     /**
      * Movie 实体列表 → 前端 DTO 列表
      */
-    private RecommendationResult toResult(List<Movie> movies, String mode) {
+    private RecommendationResult toResult(List<Movie> movies, String mode, Map<Long, Double> ratingMap) {
         List<Map<String, Object>> data = movies.stream()
-                .map(movie -> Map.<String, Object>of(
-                        "movieId", movie.getId(),
-                        "title", movie.getTitle() != null ? movie.getTitle() : "未知电影",
-                        "genres", movie.getGenres() != null ? movie.getGenres() : "未分类",
-                        "score", 0.0,
-                        "posterUrl", ""
-                ))
+                .map(movie -> {
+                    Map<String, Object> map = new java.util.HashMap<>(Map.of(
+                            "movieId", movie.getId(),
+                            "title", movie.getTitle() != null ? movie.getTitle() : "未知电影",
+                            "genres", movie.getGenres() != null ? movie.getGenres() : "未分类",
+                            "score", 0.0,
+                            "posterUrl", ""
+                    ));
+                    if (ratingMap.containsKey(movie.getId())) {
+                        map.put("rating", ratingMap.get(movie.getId()));
+                    }
+                    return map;
+                })
                 .collect(Collectors.toList());
         return new RecommendationResult(data, mode);
     }
@@ -121,6 +142,7 @@ public class RecommendationService {
         return redisTemplate.opsForList().range(offlineKey, 0, topK - 1)
                 .map(Long::valueOf)
                 .collectList()
+                .onErrorResume(e -> Mono.just(Collections.emptyList()))
                 .flatMap(offlineList -> {
                     if (!offlineList.isEmpty()) {
                         return Mono.just(offlineList);
@@ -179,7 +201,8 @@ public class RecommendationService {
                 })
                 .map(Long::valueOf)
                 .distinct()
-                .collectList();
+                .collectList()
+                .onErrorResume(e -> Mono.just(Collections.emptyList()));
     }
 
     /**
@@ -190,13 +213,20 @@ public class RecommendationService {
     }
 
     /**
-     * 模式 A: 从 Redis 读取基于威尔逊区间计算出的排行榜冷启动数据
+     * 模式 A: 从 Redis 读取基于威尔逊区间计算出的排行榜冷启动数据并打乱截取，以支持"换一批"及随机性
      */
     private Mono<List<Long>> getPopularFallback(int topK) {
         String key = "rec:popular:topk";
-        return redisTemplate.opsForZSet().reverseRange(key, Range.closed(0L, (long) topK - 1))
+        // 获取较多的候选池 (例如前 200 个) 进行打乱，每次推荐返回一小批
+        return redisTemplate.opsForZSet().reverseRange(key, Range.closed(0L, 199L))
                 .map(Long::valueOf)
-                .collectList();
+                .collectList()
+                .map(list -> {
+                    if (list.isEmpty()) return list;
+                    java.util.Collections.shuffle(list);
+                    return list.stream().limit(topK).collect(Collectors.toList());
+                })
+                .onErrorResume(e -> Mono.just(Collections.emptyList()));
     }
 
     /**

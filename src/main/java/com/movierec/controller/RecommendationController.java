@@ -53,9 +53,10 @@ public class RecommendationController {
      */
     @GetMapping("/popular")
     public Mono<ResponseEntity<Map<String, Object>>> getPopularRecommendations(
+            @RequestParam(value = "userId", required = false) Long userId,
             @RequestParam(value = "topK", defaultValue = "10") int topK) {
 
-        return recommendationService.getPopularRecommendations(topK)
+        return recommendationService.getPopularRecommendations(userId, topK)
                 .map(result -> ResponseEntity.ok(Map.of(
                         "code", 200,
                         "message", "Success",
