@@ -40,6 +40,7 @@ Thumbs.db
 .gemini/
 .superdesign/
 docs
+paper.md
 
 # Java 编译产物
 target/
