@@ -221,8 +221,7 @@ watch(
           class="md:top-1/2 md:left-1/2 md:absolute flex items-center order-1 md:order-none md:-translate-x-1/2 md:-translate-y-1/2 logo-container"
         >
           <img :src="props.logo" :alt="props.logoAlt" class="h-[28px] logo" />
-          <span class="ml-3 text-xl font-bold tracking-[-0.02em] hidden md:inline-block" style="background: linear-gradient(135deg, #fff 0%, #a463ff 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">MovieRec</span>
-          <span class="ml-3 hidden md:inline-block text-[11px] font-medium px-[10px] py-[2px] rounded-[20px] tracking-[0.03em]" style="color: #cbb8ff; background: rgba(124, 92, 252, 0.15);">NeuMF Engine</span>
+          <span class="ml-3 text-xl font-bold tracking-[-0.02em] hidden md:inline-block" style="background: linear-gradient(135deg, #fff 0%, #a463ff 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">MovieRecommendation</span>
         </div>
 
         <slot name="button">

@@ -12,7 +12,7 @@ const router = createRouter({
         },
         {
             path: '/',
-            redirect: '/popular'
+            redirect: '/personalized'
         },
         {
             path: '/popular',

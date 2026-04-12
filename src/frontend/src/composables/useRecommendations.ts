@@ -57,10 +57,16 @@ export const useRecommendations = () => {
      */
     const sendFeedback = async (payload: FeedbackPayload) => {
         try {
+            const apiPayload = {
+                user_id: payload.userId,
+                movie_id: payload.movieId,
+                action_type: payload.actionType,
+                rating: payload.rating,
+                timestamp: payload.timestamp
+            }
             await fetchWithAuth('/api/feedback', {
                 method: 'POST',
-                // fetchWithAuth already adds Content-Type
-                body: JSON.stringify(payload),
+                body: JSON.stringify(apiPayload),
             })
         } catch {
             // 反馈上报失败不阻塞前端交互

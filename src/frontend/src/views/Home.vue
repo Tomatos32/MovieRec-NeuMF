@@ -57,8 +57,19 @@
         <p>尝试选择其他类型或刷新页面</p>
       </div>
 
+      <!-- 操作栏 -->
+      <div v-if="pageType === 'popular' && !isLoading && !hasError && displayMovies.length > 0" class="action-bar">
+        <button @click="() => loadData(false)" class="refresh-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+          换一批
+        </button>
+      </div>
+
       <!-- 电影卡片网格 -->
-      <div v-else class="movie-grid">
+      <div v-if="!isLoading && !hasError && displayMovies.length > 0" class="movie-grid">
         <transition-group name="card-enter">
           <MovieCard
             v-for="(movie, index) in displayMovies"
@@ -165,7 +176,7 @@ const navItems = [
     links: [
       { label: "热门推荐", href: "/popular", ariaLabel: "热门推荐电影" },
       { label: "为你推荐", href: "/personalized", ariaLabel: "个性化推荐电影" },
-      { label: "全量电影", href: "/all", ariaLabel: "全量电影列表" }
+      { label: "全部电影", href: "/all", ariaLabel: "全部电影列表" }
     ]
   },
   {
@@ -308,6 +319,19 @@ watch([() => userId.value, () => pageType.value], ([newId]) => {
   }
 }, { immediate: true })
 
+// 监听后端返回的电影列表，将本地缓存的历史评分强制合并到全量/热门列表中，实现全局评分显示
+watch(() => movies.value, (newMovies) => {
+  if (newMovies && newMovies.length > 0) {
+    newMovies.forEach(movie => {
+      // 只要本地有过打分记录，优先显示本地打分
+      const historical = historyStore.ratingHistory.find(r => r.movieId === movie.movieId)
+      if (historical && historical.rating) {
+        movie.rating = historical.rating
+      }
+    })
+  }
+}, { deep: true })
+
 const handleGenreSelect = (genre: string) => {
   selectedGenre.value = genre
 }
@@ -354,8 +378,11 @@ const onMovieDislike = (movieId: number) => {
 
 const onMovieRate = (movieId: number, rating: number) => {
   const movie = displayMovies.value.find(m => m.movieId === movieId)
-  if (movie && (pageType.value !== 'rating-history')) {
-    historyStore.addRatingHistory(movie)
+  if (movie) {
+    movie.rating = rating // Update rating locally
+    if (pageType.value !== 'rating-history') {
+      historyStore.addRatingHistory(movie)
+    }
   }
 
   debouncedFeedback(buildPayload(movieId, 'rate', rating))
@@ -443,6 +470,42 @@ const handleLogout = () => {
   margin: 0 auto;
   padding: 32px;
   padding-top: 100px; /* offset for absolute cardnav */
+}
+
+/* 操作栏 */
+.action-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 24px;
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.refresh-btn:hover {
+  background: var(--color-accent-glow);
+  border-color: var(--color-accent);
+  color: var(--color-accent-light);
+}
+
+.refresh-btn svg {
+  transition: transform 0.5s ease;
+}
+
+.refresh-btn:hover svg {
+  transform: rotate(180deg);
 }
 
 /* 卡片网格 */

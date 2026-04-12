@@ -11,13 +11,6 @@
         @error="onImgError"
       />
       <div class="poster-overlay"></div>
-      <!-- AI 推荐匹配度角标 -->
-      <span class="match-badge">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-        {{ matchPercent }}%
-      </span>
     </div>
 
     <!-- 信息区域 -->
@@ -31,13 +24,13 @@
           v-for="star in 5" 
           :key="star"
           class="star-icon"
-          :class="{ 'active': star <= (hoverRating || currentRating) }"
+          :class="{ 'active': star <= (hoverRating || movie.rating || 0) }"
           @mouseenter="hoverRating = star"
           @mouseleave="hoverRating = 0"
           @click="handleRate(star)"
           :title="`${star} 星`"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{'filled': star <= (hoverRating || currentRating)}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{'filled': star <= (hoverRating || movie.rating || 0)}">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
         </span>
@@ -79,13 +72,10 @@ const emit = defineEmits<{
   (e: 'rate', movieId: number, rating: number): void
 }>()
 
-const isDislikeDisabled = ref(false)
-const currentRating = ref(0)
 const hoverRating = ref(0)
+const isDislikeDisabled = ref(false)
 
 const fallbackPoster = 'https://placehold.co/300x450/1a1a28/5e5e78?text=No+Poster'
-
-const matchPercent = computed(() => Math.round(props.movie.score * 100))
 
 const formattedGenres = computed(() =>
   props.movie.genres
@@ -108,7 +98,6 @@ const handleDislike = () => {
 }
 
 const handleRate = (star: number) => {
-  currentRating.value = star
   emit('rate', props.movie.movieId, star)
 }
 
@@ -179,33 +168,6 @@ const onImgError = (e: Event) => {
 
 .movie-card:hover .card-poster img {
   transform: scale(1.05);
-}
-
-/* 匹配度角标 */
-.match-badge {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  background: rgba(124, 92, 252, 0.85);
-  backdrop-filter: blur(8px);
-  border-radius: 20px;
-  letter-spacing: 0.02em;
-  z-index: 2;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  animation: pulse-badge 2s infinite;
-}
-
-@keyframes pulse-badge {
-  0% { box-shadow: 0 0 0 0 rgba(124, 92, 252, 0.4); }
-  70% { box-shadow: 0 0 0 6px rgba(124, 92, 252, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(124, 92, 252, 0); }
 }
 
 /* 信息区 */

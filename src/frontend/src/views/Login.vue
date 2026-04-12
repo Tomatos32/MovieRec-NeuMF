@@ -97,8 +97,8 @@
         <div class="max-w-xs mx-auto w-full transition-all duration-500 relative">
           
           <div class="mb-10">
-            <h2 class="text-2xl font-bold text-white mb-2 transition-all">{{ isLogin ? 'Hello Again!' : 'Create Account!' }}</h2>
-            <p class="text-gray-300 transition-all">{{ isLogin ? 'Welcome Back' : 'Join our recommendation network' }}</p>
+            <h2 class="text-2xl font-bold text-white mb-2 transition-all">{{ isLogin ? 'Hello Again!' : '创建新账户' }}</h2>
+            <p class="text-gray-300 transition-all">{{ isLogin ? '欢迎回来' : '' }}</p>
           </div>
 
           <form @submit.prevent="handleAuth" class="space-y-5">
@@ -109,7 +109,7 @@
                   v-model="form.username" 
                   type="text" 
                   class="w-full bg-white/5 border border-white/10 rounded-full px-5 py-3 pl-10 text-sm text-white outline-none focus:border-blue-400 focus:bg-white/10 transition-all placeholder-gray-400"
-                  placeholder="Username"
+                  placeholder="用户名"
                   autocomplete="username"
                   required
                 >
@@ -124,9 +124,10 @@
                   v-model="form.password" 
                   type="password" 
                   class="w-full bg-white/5 border border-white/10 rounded-full px-5 py-3 pl-10 text-sm text-white outline-none focus:border-blue-400 focus:bg-white/10 transition-all placeholder-gray-400"
-                  placeholder="Password"
+                  placeholder="密码"
                   autocomplete="current-password"
                   required
+                  minlength="6"
                 >
                  <Lock class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
               </div>
@@ -140,9 +141,10 @@
                     v-model="form.confirmPassword" 
                     type="password" 
                     class="w-full bg-white/5 border border-white/10 rounded-full px-5 py-3 pl-10 text-sm text-white outline-none focus:border-blue-400 focus:bg-white/10 transition-all placeholder-gray-400"
-                    placeholder="Confirm Password"
+                    placeholder="确认密码"
                     autocomplete="new-password"
                     :required="!isLogin"
+                    minlength="6"
                   >
                    <Lock class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
                 </div>
@@ -155,15 +157,14 @@
               :disabled="loading"
             >
               <span v-if="loading" class="flex items-center justify-center">
-                <Loader2 class="animate-spin mr-2 w-4 h-4" />{{ isLogin ? 'Logging in...' : 'Sign up...' }}
+                <Loader2 class="animate-spin mr-2 w-4 h-4" />{{ isLogin ? '正在登录...' : '正在注册...' }}
               </span>
-              <span v-else>{{ isLogin ? 'Login' : 'Sign Up' }}</span>
+              <span v-else>{{ isLogin ? '登录' : '注册' }}</span>
             </button>
             
-            <div class="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-3 sm:space-y-0">
-               <a v-if="isLogin" href="#" class="text-xs text-blue-200 hover:text-white transition-colors">Forgot Password?</a>
-               <a href="#" @click.prevent="toggleMode" class="text-xs text-blue-200 hover:text-white transition-colors ml-auto">
-                 {{ isLogin ? "Don't have an account? Sign up" : "Already have an account? Login" }}
+            <div class="flex justify-center items-center mt-6">
+               <a href="#" @click.prevent="toggleMode" class="text-xs text-blue-200 hover:text-white transition-colors">
+                 {{ isLogin ? "没有帐户？去注册" : "已有帐户？去登录" }}
                </a>
             </div>
           </form>
@@ -204,9 +205,15 @@ const toggleMode = () => {
 
 const handleAuth = async () => {
   // Client-side validation for registration
-  if (!isLogin.value && form.value.password !== form.value.confirmPassword) {
-    ElMessage.error('Passwords do not match');
-    return;
+  if (!isLogin.value) {
+    if (form.value.password.length < 6) {
+      ElMessage.error('Password must be at least 6 characters');
+      return;
+    }
+    if (form.value.password !== form.value.confirmPassword) {
+      ElMessage.error('Passwords do not match');
+      return;
+    }
   }
 
   loading.value = true;

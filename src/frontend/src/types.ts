@@ -6,6 +6,7 @@ export type Movie = {
     genres: string
     score: number
     posterUrl: string
+    rating?: number
 }
 
 export type RecommendationResponse = {
