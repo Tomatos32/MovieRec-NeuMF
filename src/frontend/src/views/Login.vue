@@ -97,7 +97,7 @@
         <div class="max-w-xs mx-auto w-full transition-all duration-500 relative">
           
           <div class="mb-10">
-            <h2 class="text-2xl font-bold text-white mb-2 transition-all">{{ isLogin ? 'Hello Again!' : '创建新账户' }}</h2>
+            <h2 class="text-2xl font-bold text-white mb-2 transition-all">{{ isLogin ? '欢迎回来！' : '创建新账户' }}</h2>
             <p class="text-gray-300 transition-all">{{ isLogin ? '欢迎回来' : '' }}</p>
           </div>
 
@@ -207,11 +207,11 @@ const handleAuth = async () => {
   // Client-side validation for registration
   if (!isLogin.value) {
     if (form.value.password.length < 6) {
-      ElMessage.error('Password must be at least 6 characters');
+      ElMessage.error('密码长度至少为 6 个字符');
       return;
     }
     if (form.value.password !== form.value.confirmPassword) {
-      ElMessage.error('Passwords do not match');
+      ElMessage.error('两次填写的密码不一致');
       return;
     }
   }
@@ -221,7 +221,7 @@ const handleAuth = async () => {
     if (isLogin.value) {
       // Login flow
       await userStore.login({ username: form.value.username, password: form.value.password });
-      ElMessage.success('Login Successful');
+      ElMessage.success('登录成功');
       
       if (form.value.username === 'admin') {
         router.push('/admin');
@@ -231,7 +231,7 @@ const handleAuth = async () => {
     } else {
       // Registration flow
       await userStore.register({ username: form.value.username, password: form.value.password });
-      ElMessage.success('Registration completed. Please Login.');
+      ElMessage.success('注册完成，请登录');
       // Auto-toggle to login mode after successful registration
       isLogin.value = true;
       form.value.password = '';
@@ -239,7 +239,7 @@ const handleAuth = async () => {
     }
   } catch (error: any) {
     console.error('Auth error details:', error);
-    ElMessage.error(error.message || (isLogin.value ? 'Login Failed' : 'Registration Failed'));
+    ElMessage.error(error.message || (isLogin.value ? '登录失败' : '注册失败'));
   } finally {
     loading.value = false;
   }
