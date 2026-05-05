@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 import pymysql
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 from datetime import datetime
 from neumf import NeuMF  # 假设这是你原本的网络定义的类所在文件
 
@@ -80,15 +81,13 @@ def resize_embeddings(model, old_num_users, old_num_movies, new_num_users, new_n
     # Resize Movie Embedding for GMF and MLP
     if new_num_movies > old_num_movies:
         print(f"Resizing Movie Embeddings: {old_num_movies} -> {new_num_movies}")
-        for emb_layer in [model.embedding_item_mlp, model.embedding_item_mf]:
+        for emb_layer in [model.embedding_movie_mlp, model.embedding_movie_mf]:
             old_weight = emb_layer.weight.data
             dim = emb_layer.embedding_dim
             new_emb = nn.Embedding(new_num_movies, dim).to(device)
             new_emb.weight.data[:old_num_movies] = old_weight
             
             # (高阶) 冷启动元数据特征聚合拼接
-            # 如果是新上架电影，尝试基于其 Genre 计算类似特征电影的均值
-            # 此处演示通过少量高斯扰动基础初始值，避免纯随机的剧烈分布偏移
             for mid in range(old_num_movies, new_num_movies):
                 base_vec = old_weight.mean(dim=0)
                 noise = torch.randn_like(base_vec) * 0.01
@@ -114,9 +113,9 @@ def freeze_old_embeddings_hook(grad, old_max_id):
 
 class IncrementalDataset(Dataset):
     def __init__(self, user_ids, movie_ids, labels, max_movie_id, num_negatives=4):
-        self.user_ids = torch.tensor(user_ids, dtype=torch.long)
-        self.movie_ids = torch.tensor(movie_ids, dtype=torch.long)
-        self.labels = torch.tensor(labels, dtype=torch.float32)
+        self.user_ids = torch.tensor(user_ids.astype(np.int64), dtype=torch.long)
+        self.movie_ids = torch.tensor(movie_ids.astype(np.int64), dtype=torch.long)
+        self.labels = torch.tensor(labels.astype(np.float32), dtype=torch.float32)
         self.max_movie_id = max_movie_id
         self.num_negatives = num_negatives
         self.all_movies = np.arange(0, max_movie_id)
@@ -142,12 +141,14 @@ def run_incremental_training(model_path, db_config):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     checkpoint = torch.load(model_path, map_location=device)
     
-    # 提取在环境配置中的旧 ID 范围
-    old_num_users = int(os.environ.get('NUM_USERS', 200948))
-    old_num_movies = int(os.environ.get('NUM_MOVIES', 84432))
+    # 提取在环境配置中的旧 ID 范围和流派
+    old_num_users = checkpoint['embedding_user_mlp.weight'].shape[0]
+    old_num_movies = checkpoint['embedding_movie_mlp.weight'].shape[0]
+    latent_dim = 64
+    num_genres = checkpoint['mlp_layers.0.weight'].shape[1] - (latent_dim * 2)
     
     # 初始化模型结构
-    model = NeuMF(num_users=old_num_users, num_items=old_num_movies, mf_dim=64, layers=[256, 128, 64]).to(device)
+    model = NeuMF(num_users=old_num_users, num_movies=old_num_movies, latent_dim=latent_dim, num_genres=num_genres).to(device)
     model.load_state_dict(checkpoint)
 
     # 2. 抽取增量和经验回放数据
@@ -176,11 +177,11 @@ def run_incremental_training(model_path, db_config):
     # 挂载冻结钩子，锁定所有旧的老 ID 向量
     model.embedding_user_mlp.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_users))
     model.embedding_user_mf.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_users))
-    model.embedding_item_mlp.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_movies))
-    model.embedding_item_mf.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_movies))
+    model.embedding_movie_mlp.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_movies))
+    model.embedding_movie_mf.weight.register_hook(lambda g: freeze_old_embeddings_hook(g, old_num_movies))
 
     # MLP 层全量解冻
-    for param in model.fc_layers.parameters():
+    for param in model.mlp_layers.parameters():
         param.requires_grad = True
 
     # 放弃老动量，使用极低学习率 (5e-5) 重建 Adam
@@ -202,20 +203,25 @@ def run_incremental_training(model_path, db_config):
     print(f"Starting Incremental Finetuning for {epochs} epochs...")
     for epoch in range(epochs):
         epoch_loss = 0.0
-        for u, m, y in dataloader:
+        progress = tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Epoch {epoch+1}/{epochs}")
+        for batch_idx, (u, m, y) in progress:
             u, m, y = u.to(device), m.to(device), y.to(device)
             optimizer.zero_grad()
-            preds = model(u, m).squeeze()
-            loss = criterion(preds, y)
+            preds = model(u, m).squeeze(-1)
+            # 采用带 Logits 的损失函数
+            loss = nn.BCEWithLogitsLoss()(preds, y)
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
             
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/len(dataloader):.4f}")
+            if batch_idx % 10 == 0:
+                progress.set_postfix(loss=f"{loss.item():.4f}")
+            
+        print(f"Epoch {epoch+1}/{epochs} | Avg Loss: {epoch_loss/len(dataloader):.4f}")
 
-    # 保存新的微调网络
-    torch.save(model.state_dict(), model_path + ".incremental")
-    print(f"Saved optimized model to {model_path}.incremental")
+    # 覆盖原模型，从此支持新用户
+    torch.save(model.state_dict(), model_path)
+    print(f"Saved optimized model to {model_path} (Replaced original)")
 
 if __name__ == '__main__':
     # 请根据本地设置替换 MySQL 凭证
@@ -223,8 +229,10 @@ if __name__ == '__main__':
         'host': '127.0.0.1',
         'port': 3306,
         'user': 'root',
-        'password': '', # FILL IN ENV 
+        'password': '123456', 
         'database': 'movierec_db'
     }
-    model_path = '../model/model.pth'
-    # run_incremental_training(model_path, db_config)
+    # 使用基于脚本位置的绝对路径，确保在不同目录下运行都能找到模型
+    model_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(model_dir, 'model.pth')
+    run_incremental_training(model_path, db_config)

@@ -89,7 +89,7 @@ class NeuMF(nn.Module):
         fusion_vector = torch.cat([mf_vector, mlp_vector], dim=-1)
         prediction = self.fusion_layer(fusion_vector)
         
-        return self.sigmoid(prediction).squeeze(-1)
+        return prediction.squeeze(-1)
 
 def get_optimizer(model: NeuMF, lr: float = 1e-3, weight_decay: float = 1e-4) -> optim.Optimizer:
     """
@@ -125,7 +125,7 @@ def train_one_epoch(model: nn.Module, data_loader: DataLoader,
     total_loss = 0.0
     
     # 1. 初始化梯度缩放器 (AMP)
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+    scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
     
     progress = tqdm(enumerate(data_loader), total=len(data_loader), 
                     desc="  Training", unit="batch", ncols=100)
@@ -139,7 +139,7 @@ def train_one_epoch(model: nn.Module, data_loader: DataLoader,
         labels = labels.to(device, non_blocking=True)
         
         # 2. 以前向传播开启混合精度上下文
-        with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+        with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
             if global_genres_matrix is not None:
                 batch_genres = global_genres_matrix[movies]
                 predictions = model(users, movies, batch_genres)
@@ -216,7 +216,7 @@ class NeuMFNoConcat(nn.Module):
         # --- Fusion Path ---
         fusion_vector = torch.cat([mf_vector, mlp_vector], dim=-1)
         prediction = self.fusion_layer(fusion_vector)
-        return self.sigmoid(prediction).squeeze(-1)
+        return prediction.squeeze(-1)
 
 if __name__ == '__main__':
     # 简单实例化调试
