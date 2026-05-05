@@ -7,6 +7,7 @@ from collections import defaultdict
 import random
 import os
 import gc
+from tqdm import tqdm
 
 
 class MovieLensProcessor:
@@ -239,30 +240,41 @@ class MovieLensDataset(Dataset):
             
             # 填充其余位置
             for i in range(1, 1 + num_negatives):
-                # 随机抽取候选
+                print(f"  - Sampling Negative Slot {i}/{num_negatives}...")
+                # 随机抽取候选 (先一次性向量化抽取)
                 neg_candidates = np.random.choice(all_movies_np, size=num_pos)
                 
-                # 校验碰撞 (虽然 32M 数据集碰撞率极低，但仍做一次快速掩码修复)
-                # 使用底层高效逻辑进行冲突检测
-                for j in range(num_pos):
-                    u = pos_users[j]
-                    m = neg_candidates[j]
-                    # 如果冲突，则重抽 (仅针对单条，保持整体速度)
-                    # 由于 searchsorted 很快，这种修复对性能影响极小
-                    interacted = user_interacted_movies.get(u)
-                    if collided := (interacted is not None and np.isin(m, interacted, assume_unique=True)):
-                        while (interacted is not None and np.isin(m, interacted, assume_unique=True)):
-                            m = random.choice(all_movies_list)
-                        neg_candidates[j] = m
+                # 校验碰撞：使用更快的逻辑
+                # 对于 32M 数据，Python 循环依然是瓶颈，我们按块更新进度
+                chunk_size = 1_000_000
+                for start_j in tqdm(range(0, num_pos, chunk_size), desc=f"    Slot {i} Checking"):
+                    end_j = min(start_j + chunk_size, num_pos)
+                    for j in range(start_j, end_j):
+                        u = pos_users[j]
+                        m = neg_candidates[j]
+                        interacted = user_interacted_movies.get(u)
+                        
+                        if interacted is not None:
+                            # 极速版碰撞检测：利用 searchsorted
+                            idx = np.searchsorted(interacted, m)
+                            if idx < len(interacted) and interacted[idx] == m:
+                                # 发生碰撞，重抽直到不碰撞
+                                while True:
+                                    m_new = random.choice(all_movies_list)
+                                    idx_new = np.searchsorted(interacted, m_new)
+                                    if not (idx_new < len(interacted) and interacted[idx_new] == m_new):
+                                        neg_candidates[j] = m_new
+                                        break
                 
                 users_np[i::1+num_negatives] = pos_users
                 movies_np[i::1+num_negatives] = neg_candidates
                 labels_np[i::1+num_negatives] = 0.0
             
             # 4. 转换为 Tensor 并释放临时内存
-            self.users = torch.from_numpy(users_np).long()
-            self.movies = torch.from_numpy(movies_np).long()
-            self.labels = torch.from_numpy(labels_np).float()
+            # 使用 int32 存储索引，节省 50% 内存。PyTorch Embedding 层能自动处理 int32 索引。
+            self.users = torch.from_numpy(users_np)
+            self.movies = torch.from_numpy(movies_np)
+            self.labels = torch.from_numpy(labels_np)
             
             del users_np, movies_np, labels_np
             print(f"[Dataset] Pre-sampling complete. Total samples: {len(self.users)}")
@@ -271,8 +283,8 @@ class MovieLensDataset(Dataset):
         return len(self.users)
         
     def __getitem__(self, idx):
-        # 此时 __getitem__ 变为纯粹的内存查找，速度达到理论极致
-        return self.users[idx], self.movies[idx], self.labels[idx]
+        # 显式转换为 long 确保 Embedding 层兼容性
+        return self.users[idx].long(), self.movies[idx].long(), self.labels[idx]
 
 
 if __name__ == '__main__':

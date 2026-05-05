@@ -32,12 +32,20 @@ def batch_recommender(db_config, redis_args, model_path, target_users=3000, top_
     
     # 1. 动态加载模型并嗅探矩阵大小
     state_dict = torch.load(model_path, map_location=device)
-    num_users = state_dict['embedding_user_mlp.weight'].shape[0]
-    num_movies = state_dict['embedding_movie_mlp.weight'].shape[0]
     
-    print(f"Model bounds loaded: Users={num_users}, Movies={num_movies}")
+    # 探测 GMF 或 MLP 中的用户/电影 embedding 维度
+    if 'embedding_user_mlp.weight' in state_dict:
+        num_users = state_dict['embedding_user_mlp.weight'].shape[0]
+        num_movies = state_dict['embedding_movie_mlp.weight'].shape[0]
+        
+        # 探测 num_genres (从 MLP 第一层权重推导)
+        latent_dim = 64
+        mlp_input_dim = state_dict['mlp_layers.0.weight'].shape[1]
+        num_genres = mlp_input_dim - (latent_dim * 2)
+        
+        print(f"Model bounds loaded: Users={num_users}, Movies={num_movies}, Genres={num_genres}")
     
-    model = NeuMF(num_users=num_users, num_movies=num_movies)
+    model = NeuMF(num_users=num_users, num_movies=num_movies, latent_dim=latent_dim, num_genres=num_genres)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
@@ -68,13 +76,28 @@ def batch_recommender(db_config, redis_args, model_path, target_users=3000, top_
         candidate_tensor = torch.tensor(valid_candidates, dtype=torch.long).to(device)
         num_candidates = len(valid_candidates)
         
-        print(f"Starting Offline Batch Inference for Top {target_users} Active Users...")
+        # 3. 动态定义“活跃用户” (Active Users)
+        # 通过分析 ratings 表，定义活跃用户为：最近参与过电影评分反馈的 Top N 个用户
+        print(f"Identifying Top {target_users} Active Users based on recent rating activity...")
+        cursor.execute(f"""
+            SELECT user_id 
+            FROM ratings 
+            GROUP BY user_id 
+            ORDER BY MAX(timestamp) DESC 
+            LIMIT {target_users}
+        """)
+        active_users = [row[0] for row in cursor.fetchall()]
         
-        # 我们限制执行前 target_users 人（也就是压测用户）
+        # 安全过滤：剔除尚未参与本次模型训练（超出 Embedding 范围）的绝对新用户
+        valid_active_users = [uid for uid in active_users if 0 <= uid < num_users]
+        print(f"Found {len(active_users)} active users, {len(valid_active_users)} are valid within current model bounds.")
+        
+        print(f"Starting Offline Batch Inference for Active Users...")
+        
         batch_mysql_data = []
         
-        # tqdm 显示计算进度
-        for uid in tqdm(range(1, min(target_users + 1, num_users))):
+        # 遍历有效活跃用户进行推断
+        for uid in tqdm(valid_active_users, desc="Offline Inferring"):
             
             # 使用 PyTorch 矢量化一次性计算该用户对 1000 部流行电影的分数
             users_tensor = torch.full((num_candidates,), uid, dtype=torch.long).to(device)
@@ -88,10 +111,12 @@ def batch_recommender(db_config, redis_args, model_path, target_users=3000, top_
             top_k_movie_ids = candidate_tensor[top_k_indices].cpu().numpy().tolist()
             top_k_scores_list = top_k_scores.cpu().numpy().tolist()
             
-            # (A) 准备录入 Redis rec:offline:{userId} [使用 List 推送以极速读取]
+            # (A) 准备录入 Redis rec:offline:{userId} [使用 ZSET 以保留分数]
             redis_key = f"rec:offline:{uid}"
             pipe.delete(redis_key)
-            pipe.rpush(redis_key, *top_k_movie_ids) # 顺序排列从左到右
+            # mapping 为 {movieId: score}
+            mapping = {str(mid): float(sc) for mid, sc in zip(top_k_movie_ids, top_k_scores_list)}
+            pipe.zadd(redis_key, mapping)
             
             # (B) 准备录入 MySQL
             for mid, score in zip(top_k_movie_ids, top_k_scores_list):
@@ -140,5 +165,7 @@ if __name__ == '__main__':
     }
     model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model', 'model.pth'))
     
-    # 你的活跃用户数量定义为前 3000
+    # 执行离线批处理推荐
+    # 此处 target_users 指代我们希望为多少个“最近最活跃”的用户提前算好推荐列表
+    # 我们设置 3000 人，您可以根据实际服务器内存和算力进行调整
     batch_recommender(db_config, redis_args, model_path, target_users=3000, top_k=20)
