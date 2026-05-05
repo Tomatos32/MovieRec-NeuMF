@@ -5,6 +5,10 @@ from typing import List, Dict
 import os
 import sys
 
+# 限制 PyTorch 的 CPU 多线程计算，避免在高并发 (workers > 1) 压测下产生 OpenMP 线程上下文切换竞争导致 P90 延迟飙升
+torch.set_num_threads(1) 
+
+
 # 本地环境变量与路径兼容
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
@@ -44,11 +48,18 @@ async def startup_event():
         if 'embedding_user_mlp.weight' in state_dict:
             real_num_users = state_dict['embedding_user_mlp.weight'].shape[0]
             real_num_movies = state_dict['embedding_movie_mlp.weight'].shape[0]
-            print(f"[Sidecar] Detected dimensions from weights: {real_num_users} users, {real_num_movies} movies.")
+            
+            # 探测 num_genres (从 MLP 第一层权重推导)
+            latent_dim = 64
+            mlp_input_dim = state_dict['mlp_layers.0.weight'].shape[1]
+            real_num_genres = mlp_input_dim - (latent_dim * 2)
+            
+            print(f"[Sidecar] Detected dimensions: {real_num_users} users, {real_num_movies} movies, {real_num_genres} genres.")
             num_users = real_num_users
             num_movies = real_num_movies
+            num_genres = real_num_genres
             
-        model = NeuMF(num_users=num_users, num_movies=num_movies)
+        model = NeuMF(num_users=num_users, num_movies=num_movies, num_genres=num_genres)
         model.load_state_dict(state_dict)
         print(f"[Sidecar] Model loaded successfully from {model_path}.")
     else:
@@ -59,7 +70,7 @@ async def startup_event():
     model.eval()
 
 @app.post("/api/predict")
-async def predict(request: PredictRequest) -> Dict:
+def predict(request: PredictRequest) -> Dict:
     global model
     
     user_id = request.user_id
@@ -110,4 +121,4 @@ async def predict(request: PredictRequest) -> Dict:
 if __name__ == "__main__":
     import uvicorn
     # 建议部署在与主业务相同的 Pod 或同一物理机内部 (127.0.0.1) 消除网络传输损耗
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, workers=1)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, workers=4)

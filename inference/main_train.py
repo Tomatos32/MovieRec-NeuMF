@@ -55,12 +55,12 @@ def main():
     )
 
     use_cuda = device.type == "cuda"
-    batch_size = 16384  # 核心优化：充分利用 GPU 吞吐量
+    batch_size = 8192  # 降低 Batch Size 确保显存稳定性
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=4,  # 已静态化 Tensor，开启多线程毫无压力
+        num_workers=0,  # Windows 共享内存机制处理上亿数据极易崩溃，改为 0 以保稳
         pin_memory=use_cuda,
     )
 
@@ -77,9 +77,10 @@ def main():
     print(f"    - 模型总参数量: {total_params:,}")
 
     # ===== 5. 配置优化器与损失函数 =====
-    print("\n>>> 4. 配置优化器 (带选择性 L2 正则化) & BCELoss...")
+    print("\n>>> 4. 配置优化器 (带选择性 L2 正则化) & BCEWithLogitsLoss...")
     optimizer = get_optimizer(model, lr=1e-3, weight_decay=1e-4)
-    criterion = nn.BCELoss()
+    # 使用 BCEWithLogitsLoss 提高数值稳定性并支持混合精度安全计算
+    criterion = nn.BCEWithLogitsLoss()
 
     # ===== 6. 开始正式训练 =====
     epochs = 3  
