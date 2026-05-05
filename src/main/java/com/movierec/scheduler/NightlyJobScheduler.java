@@ -35,7 +35,7 @@ public class NightlyJobScheduler {
 
         // 我们需要按顺序执行的脚本 (先增量更新模型，再全量刷入 Redis)
         String[] scriptsToRun = {
-            "scripts" + File.separator + "train_incremental.py",
+            "model" + File.separator + "train_incremental.py",
             "scripts" + File.separator + "batch_recommender.py"
         };
 
