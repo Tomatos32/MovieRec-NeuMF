@@ -4,6 +4,8 @@ import com.movierec.repository.MovieRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
+import com.movierec.model.Movie;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -57,10 +59,17 @@ public class MovieController {
      */
     @GetMapping("/all")
     public Mono<ResponseEntity<Map<String, Object>>> getAllMovies(
+            @RequestParam(required = false) String genre,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
         int offset = page * size;
-        return movieRepository.findAllMovies(size, offset)
+        Flux<Movie> movieFlux;
+        if (genre != null && !genre.trim().isEmpty()) {
+            movieFlux = movieRepository.findMoviesByGenre(genre, size, offset);
+        } else {
+            movieFlux = movieRepository.findAllMovies(size, offset);
+        }
+        return movieFlux
                 .collectList()
                 .map(movies -> {
                     List<Map<String, Object>> data = movies.stream()
@@ -76,7 +85,9 @@ public class MovieController {
                     body.put("code", 200);
                     body.put("message", "Success");
                     body.put("data", data);
-                    return ResponseEntity.ok(body);
+                    return ResponseEntity.ok()
+                            .cacheControl(org.springframework.http.CacheControl.maxAge(java.time.Duration.ofMinutes(10)))
+                            .body(body);
                 })
                 .onErrorResume(ex -> Mono.just(ResponseEntity.internalServerError()
                         .body(Map.of("code", 500, "message", "获取全量电影失败: " + ex.getMessage(), "data", Collections.emptyList()))));

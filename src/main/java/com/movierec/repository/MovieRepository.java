@@ -27,5 +27,11 @@ public interface MovieRepository extends R2dbcRepository<Movie, Long> {
      */
     @Query("SELECT * FROM movies ORDER BY id ASC LIMIT :limit OFFSET :offset")
     Flux<Movie> findAllMovies(int limit, int offset);
+
+    /**
+     * 按类型过滤并分页获取电影
+     */
+    @Query("SELECT * FROM movies WHERE genres LIKE CONCAT('%', :genre, '%') ORDER BY id ASC LIMIT :limit OFFSET :offset")
+    Flux<Movie> findMoviesByGenre(String genre, int limit, int offset);
 }
 
