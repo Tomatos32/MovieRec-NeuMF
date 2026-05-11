@@ -16,7 +16,7 @@ export const useRecommendations = () => {
     /**
      * 拉取推荐列表
      */
-    const fetchRecommendations = async (userId: number, type: 'popular' | 'personalized' | 'all' = 'popular', page = 0, append = false) => {
+    const fetchRecommendations = async (userId: number, type: 'popular' | 'personalized' | 'all' = 'popular', page = 0, append = false, genre = '') => {
         if (!append) isLoading.value = true
         hasError.value = false
         errorMessage.value = ''
@@ -25,7 +25,7 @@ export const useRecommendations = () => {
         if (type === 'personalized') {
             url = `/api/recommendations?userId=${userId}&topK=20`
         } else if (type === 'all') {
-            url = `/api/movies/all?page=${page}&size=50`
+            url = `/api/movies/all?page=${page}&size=50${genre ? '&genre=' + encodeURIComponent(genre) : ''}`
         }
 
         console.log(`[Recommendations] 请求 (${type}):`, url)

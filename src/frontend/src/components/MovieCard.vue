@@ -75,7 +75,7 @@ const emit = defineEmits<{
 const hoverRating = ref(0)
 const isDislikeDisabled = ref(false)
 
-const fallbackPoster = 'https://placehold.co/300x450/1a1a28/5e5e78?text=No+Poster'
+const fallbackPoster = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450"><rect width="300" height="450" fill="%231a1a28"/><text x="50%" y="50%" fill="%235e5e78" font-size="24" font-family="sans-serif" text-anchor="middle" dominant-baseline="middle">No Poster</text></svg>'
 
 const formattedGenres = computed(() =>
   props.movie.genres

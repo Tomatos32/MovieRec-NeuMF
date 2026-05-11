@@ -13,8 +13,7 @@
     >
       <template #button>
         <div class="user-info hidden md:flex items-center gap-4 h-full">
-          <span class="username text-sm text-[#9a9ab0]">{{ userStore.user?.username }} (ID: {{ userId }})</span>
-          <button @click="handleLogout" class="px-4 py-2 border-0 rounded-[calc(0.75rem-0.2rem)] h-full font-medium transition-colors duration-300 cursor-pointer hover:bg-[#6a4ae0]" style="background-color: #7c5cfc; color: #fff;">登出</button>
+          <span class="username text-sm text-[#9a9ab0]">欢迎你，{{ userStore.user?.username }}</span>
         </div>
       </template>
     </CardNav>
@@ -229,15 +228,17 @@ const genreImages = import.meta.glob('../assets/genres/*.jpg', { eager: true, as
 
 const getGenreImage = (genre: string) => {
   const path = `../assets/genres/${genre}.jpg`
-  return genreImages[path] || `https://picsum.photos/seed/${genre}/800/600`
+  return genreImages[path] || genreImages['../assets/genres/Action.jpg']
 }
 
 const genreItems = computed(() => {
-  return genres.value.map((genre) => ({
-    text: genreMap[genre] || genre,
-    value: genre,
-    image: getGenreImage(genre)
-  }))
+  return genres.value
+    .filter(genre => genre !== '(no genres listed)')
+    .map((genre) => ({
+      text: genreMap[genre] || genre,
+      value: genre,
+      image: getGenreImage(genre)
+    }))
 })
 
 onMounted(async () => {
@@ -283,37 +284,35 @@ onUnmounted(() => {
   }
 })
 
-const loadData = (append = false) => {
+const loadData = async (append = false) => {
   if (!append) {
     currentPage.value = 0
   }
 
   if (pageType.value === 'popular') {
     if (userId.value !== null) {
-      fetchRecommendations(userId.value, 'popular', 0, append)
+      await fetchRecommendations(userId.value, 'popular', 0, append)
     }
   } else if (pageType.value === 'personalized') {
     if (userId.value !== null) {
-      fetchRecommendations(userId.value, 'personalized', 0, append)
+      await fetchRecommendations(userId.value, 'personalized', 0, append)
     }
   } else if (pageType.value === 'all-movies') {
     if (userId.value !== null) {
-      isFetchingMore.value = true
-      fetchRecommendations(userId.value, 'all', currentPage.value, append)
+      if (append) {
+        isFetchingMore.value = true;
+      }
+      await fetchRecommendations(userId.value, 'all', currentPage.value, append, selectedGenre.value)
+      if (append) {
+        isFetchingMore.value = false;
+      }
     }
   }
   // history views dont need to fetch from backend
 }
 
-// 监听加载状态，收尾无限滚动状态
-watch(isLoading, (newLoading) => {
-  if (!newLoading) {
-    isFetchingMore.value = false
-  }
-})
-
-// 监听用户变动或路由变动自动刷新
-watch([() => userId.value, () => pageType.value], ([newId]) => {
+// 监听用户变动、路由变动或类型变动自动刷新
+watch([() => userId.value, () => pageType.value, () => selectedGenre.value], ([newId]) => {
   if (newId !== null) {
     loadData(false)
   }
