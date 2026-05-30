@@ -20,7 +20,7 @@ export const useHistoryStore = defineStore('history', () => {
                 }
                 localStorage.removeItem('browsingHistory')
             }
-            
+
             const legacyRating = localStorage.getItem('ratingHistory')
             if (legacyRating) {
                 if (!localStorage.getItem(`ratingHistory_${userId}`)) {
@@ -76,11 +76,11 @@ export const useHistoryStore = defineStore('history', () => {
 
         browsingHistory.value = []
         ratingHistory.value = []
-        
+
         // 彻底清理当前用户的隔离沙盒
         localStorage.removeItem(`browsingHistory_${userId}`)
         localStorage.removeItem(`ratingHistory_${userId}`)
-        
+
         // 斩草除根：额外强制清理任何可能残留的公共沙盒键名
         localStorage.removeItem('browsingHistory')
         localStorage.removeItem('ratingHistory')

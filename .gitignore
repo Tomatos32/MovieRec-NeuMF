@@ -41,6 +41,8 @@ Thumbs.db
 .superdesign/
 docs
 paper.md
+Agent.md
+kill_8088.bat
 
 # Java 编译产物
 target/

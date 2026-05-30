@@ -40,29 +40,65 @@ MovieRec-NNCF/
 
 ## 部署与启动指引
 
-1. **环境要求**
-   - JDK 17 / Maven
-   - Python 3.8+ (CUDA 12.x)
-   - Node.js 18.x
+### 1. 环境要求与依赖安装
 
-2. **基础设施启动**
-   - 确保 MySQL, Redis, Kafka 服务正常运行。
-   - 执行 `sql/schema.sql` 完成表结构初始化。
+- **后端系统 (Java 17 / Maven 3.x)**
+  - 核心依赖：`Spring WebFlux`, `R2DBC (MySQL Reactive)`, `Reactive Redis`, `Spring Kafka`, `Resilience4j`, `Lombok`, `jjwt`
+  - 依赖安装：
+    ```bash
+    # 在项目根目录下执行以预下载并构建 Maven 依赖
+    mvn clean install -Dmaven.test.skip=true
+    ```
 
-3. **数据准备与初始训练**
-   - 将 MovieLens 32M 数据集的 `ratings.csv` 放入指定目录。
-   - 运行 `data_pipeline/data_processor.py` 进行数据预处理。
-   - 运行模型训练脚本，训练完成后将权重保存为 `model/model.pth`。
+- **模型推理与数据管道 (Python 3.8+ / 推荐 CUDA 环境)**
+  - 核心依赖：`FastAPI`, `Uvicorn`, `Pydantic`, `PyTorch`, `Pandas`, `NumPy`, `Scikit-Learn`, `Tqdm`
+  - 依赖安装：
+    ```bash
+    # 安装 Python 深度学习和推理所需依赖
+    pip install -r inference/requirements.txt
+    ```
 
-4. **服务启动**
-   - 使用 Docker Compose 一键启动基础设施：
-     ```bash
-     docker-compose up -d
-     ```
-   - 启动 Spring Boot 后端主程序。
-   - 启动前端开发服务器：
-     ```bash
-     cd src/frontend && npm install && npm run dev
-     ```
+- **前端交互系统 (Node.js 18.x / npm 9.x+)**
+  - 核心依赖：`Vue 3`, `Vite`, `Element Plus`, `Pinia`, `Vue Router`, `GSAP`, `Lucide Vue`, `Tailwind CSS v4`
+  - 依赖安装：
+    ```bash
+    # 切换至前端目录并安装依赖
+    cd src/frontend && npm install
+    ```
+
+### 2. 基础设施启动
+
+- 确保 MySQL, Redis, Kafka 服务正常运行。
+- 可以使用 Docker Compose 一键拉取并运行推荐系统所需的全部基础设施：
+  ```bash
+  docker-compose up -d
+  ```
+- 执行 `sql/schema.sql` 完成 MySQL 表结构设计与分区表的初始化。
+
+### 3. 数据准备与模型训练
+
+- 将 MovieLens 32M 数据集的 `ratings.csv` 放入 `data` 目录。
+- 运行数据清洗及采样脚本进行特征管道处理：
+  ```bash
+  python data_pipeline/data_processor.py
+  ```
+- 运行模型训练脚本，训练完成后将模型权重保存为 `model/model.pth`。
+
+### 4. 服务运行与启动
+
+- **启动推理模块 (FastAPI)**：
+  ```bash
+  cd inference && uvicorn main:app --host 0.0.0.0 --port 8000
+  ```
+- **启动业务调度模块 (Spring Boot)**：
+  直接在 IDE 中运行 `com.movierec.nncf.MovieRecNncfApplication` 的 `main` 方法，或通过 Maven 命令行启动：
+  启动时请注意可能会出现端口占用等问题，可以在任务管理器中结束名为“ApplicationWebServerDaemon的进程”
+  ```bash
+  mvn spring-boot:run
+  ```
+- **启动前端交互界面 (Vue 3)**：
+  ```bash
+  cd src/frontend && npm run dev
+  ```
 
 更多详细信息请参考 [Incremental_Training_Summary.md](./docs/MovieRec/Incremental_Training_Summary.md)。
