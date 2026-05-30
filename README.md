@@ -66,14 +66,17 @@ MovieRec-NNCF/
     cd src/frontend && npm install
     ```
 
-### 2. 基础设施启动
+### 2. 基础设施与推理模块启动
 
-- 确保 MySQL, Redis, Kafka 服务正常运行。
-- 可以使用 Docker Compose 一键拉取并运行推荐系统所需的全部基础设施：
+- **容器化基础设施**：使用 Docker Compose 可以一键构建并启动底层服务及**模型推理边车**。它会自动运行以下容器：
+  - **Redis** (缓存服务)
+  - **Zookeeper & Kafka** (事件消息总线)
+  - **FastAPI 推理边车** (`inference-sidecar`，自动加载训练好的模型权重 `/app/model/model.pth` 并运行在 `8000` 端口)
+- **启动命令**：
   ```bash
   docker-compose up -d
   ```
-- 执行 `sql/schema.sql` 完成 MySQL 表结构设计与分区表的初始化。
+- **MySQL 数据库**：采用宿主机本地安装的实例，确保其正常运行，并执行 `sql/schema.sql` 完成表结构设计与分区表的初始化。
 
 ### 3. 数据准备与模型训练
 
@@ -82,23 +85,33 @@ MovieRec-NNCF/
   ```bash
   python data_pipeline/data_processor.py
   ```
-- 运行模型训练脚本，训练完成后将模型权重保存为 `model/model.pth`。
+- 运行模型训练脚本，训练完成后将模型权重保存为 `model/model.pth`（该目录已通过 Volume 挂载同步到推理容器内）。
 
 ### 4. 服务运行与启动
 
-- **启动推理模块 (FastAPI)**：
-  ```bash
-  cd inference && uvicorn main:app --host 0.0.0.0 --port 8000
-  ```
-- **启动业务调度模块 (Spring Boot)**：
-  直接在 IDE 中运行 `com.movierec.nncf.MovieRecNncfApplication` 的 `main` 方法，或通过 Maven 命令行启动：
-  启动时请注意可能会出现端口占用等问题，可以在任务管理器中结束名为“ApplicationWebServerDaemon的进程”
-  ```bash
-  mvn spring-boot:run
-  ```
-- **启动前端交互界面 (Vue 3)**：
-  ```bash
-  cd src/frontend && npm run dev
-  ```
+- **业务调度/后端模块 (Spring Boot)**：
+  - **项目目录**：项目根目录 `MovieRec-NNCF/` (因 `pom.xml` 位于根目录)。
+  - **启动方式**：直接在 IDE 中打开项目根目录并运行 `com.movierec.nncf.MovieRecNncfApplication` 的 `main` 方法，或直接在根目录下通过命令行启动：
+    ```bash
+    mvn spring-boot:run
+    ```
+  - **提示**：若遇到端口占用，可在任务管理器中结束名为 `ApplicationWebServerDaemon` 的进程。
+
+- **前端交互模块 (Vue 3)**：
+  - **项目目录**：`src/frontend/`
+  - **启动方式**：
+    ```bash
+    cd src/frontend
+    npm run dev
+    ```
+
+- **[可选] 手动调试推理模块 (Python/FastAPI)**：
+  - **说明**：正常情况下推理模块已在第二步通过 Docker 自动拉起。若需要对其代码进行本地开发或断点调试，可关闭容器并手动运行：
+  - **项目目录**：`inference/`
+  - **启动方式**：
+    ```bash
+    cd inference
+    uvicorn main:app --host 0.0.0.0 --port 8000
+    ```
 
 更多详细信息请参考 [Incremental_Training_Summary.md](./docs/MovieRec/Incremental_Training_Summary.md)。
